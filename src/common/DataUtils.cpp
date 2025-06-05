@@ -1,5 +1,5 @@
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~//
-// Copyright (c) 2017-24, Lawrence Livermore National Security, LLC
+// Copyright (c) 2017-25, Lawrence Livermore National Security, LLC
 // and RAJA Performance Suite project contributors.
 // See the RAJAPerf/LICENSE file for details.
 //
@@ -10,14 +10,22 @@
 #include "CudaDataUtils.hpp"
 #include "HipDataUtils.hpp"
 #include "OpenMPTargetDataUtils.hpp"
+#include "SyclDataUtils.hpp"
 
+#include "KernelBase.hpp"
 
 #include "RAJA/internal/MemUtils_CPU.hpp"
 
 #include <cstdlib>
 #include <cstring>
 #include <stdexcept>
+#include <iomanip>
+
+#if defined(_WIN32)
+#include<direct.h>
+#else
 #include <unistd.h>
+#endif
 
 namespace rajaperf
 {
@@ -99,6 +107,21 @@ bool isHipDataSpace(DataSpace dataSpace)
     case DataSpace::HipManagedAdviseCoarse:
     case DataSpace::HipDevice:
     case DataSpace::HipDeviceFine:
+      return true;
+    default:
+      return false;
+  }
+}
+
+/*!
+ * \brief Get if the data space is a sycl DataSpace.
+ */
+bool isSyclDataSpace(DataSpace dataSpace)
+{
+  switch (dataSpace) {
+    case DataSpace::SyclPinned:
+    case DataSpace::SyclManaged:
+    case DataSpace::SyclDevice:
       return true;
     default:
       return false;
@@ -263,6 +286,25 @@ void* allocData(DataSpace dataSpace, Size_type nbytes, Size_type align)
     } break;
 #endif
 
+#if defined(RAJA_ENABLE_SYCL)
+    case DataSpace::SyclPinned:
+    {
+      auto qu = camp::resources::Sycl::get_default().get_queue();
+      ptr = detail::allocSyclPinnedData(nbytes, qu);
+    } break;
+    case DataSpace::SyclManaged:
+    {
+      auto qu = camp::resources::Sycl::get_default().get_queue();
+      ptr = detail::allocSyclManagedData(nbytes, qu);
+    } break;
+    case DataSpace::SyclDevice:
+    {
+      auto qu = camp::resources::Sycl::get_default().get_queue();
+      ptr = detail::allocSyclDeviceData(nbytes, qu);
+    } break;
+#endif
+
+
     default:
     {
       throw std::invalid_argument("allocData : Unknown data space");
@@ -307,6 +349,14 @@ void copyData(DataSpace dst_dataSpace, void* dst_ptr,
   else if (isHipDataSpace(dst_dataSpace) ||
            isHipDataSpace(src_dataSpace)) {
     detail::copyHipData(dst_ptr, src_ptr, nbytes);
+  }
+#endif
+
+#if defined(RAJA_ENABLE_SYCL)
+  else if (isSyclDataSpace(dst_dataSpace) ||
+           isSyclDataSpace(src_dataSpace)) {
+    auto qu = camp::resources::Sycl::get_default().get_queue();
+    detail::copySyclData(dst_ptr, src_ptr, nbytes, qu);
   }
 #endif
 
@@ -392,6 +442,26 @@ void deallocData(DataSpace dataSpace, void* ptr)
       detail::deallocHipDeviceData(ptr);
     } break;
 #endif
+
+#if defined(RAJA_ENABLE_SYCL)
+    case DataSpace::SyclPinned:
+    {
+      auto qu = camp::resources::Sycl::get_default().get_queue();
+      detail::deallocSyclPinnedData(ptr, qu);
+    } break;
+    case DataSpace::SyclManaged:
+    {
+      auto qu = camp::resources::Sycl::get_default().get_queue();
+      detail::deallocSyclManagedData(ptr, qu);
+    } break;
+    case DataSpace::SyclDevice:
+    {
+      auto qu = camp::resources::Sycl::get_default().get_queue();
+      detail::deallocSyclDeviceData(ptr, qu);
+    } break;
+#endif
+
+
 
     default:
     {
@@ -528,70 +598,59 @@ void initData(Real_type& d)
 /*
  * Calculate and return checksum for data arrays.
  */
-long double calcChecksum(Int_ptr ptr, Size_type len,
-                         Real_type scale_factor)
+template < typename Data_getter >
+long double calcChecksumImpl(Data_getter data, Size_type len,
+                             Real_type scale_factor)
 {
   long double tchk = 0.0;
   long double ckahan = 0.0;
   for (Size_type j = 0; j < len; ++j) {
-    long double x = (std::abs(std::sin(j+1.0))+0.5) * ptr[j];
+    long double x = (std::abs(std::sin(j+1.0))+0.5) * data(j);
     long double y = x - ckahan;
     volatile long double t = tchk + y;
     volatile long double z = t - tchk;
     ckahan = z - y;
     tchk = t;
 #if 0 // RDH DEBUG
-    if ( (j % 100) == 0 ) {
-      getCout() << "j : tchk = " << j << " : " << tchk << std::endl;
+    if ( (j % 10000000) == 0 ) {
+      getCout() << "j : tchk = " << std::setprecision(std::numeric_limits<double>::max_digits10) << j << " : " << tchk << std::endl;
     }
 #endif
   }
   tchk *= scale_factor;
   return tchk;
+}
+
+long double calcChecksum(Int_ptr ptr, Size_type len,
+                         Real_type scale_factor)
+{
+  return calcChecksumImpl([=](Size_type j) {
+    return static_cast<long double>(ptr[j]);
+  }, len, scale_factor);
+}
+
+long double calcChecksum(unsigned long long* ptr, Size_type len,
+                         Real_type scale_factor)
+{
+  return calcChecksumImpl([=](Size_type j) {
+    return static_cast<long double>(ptr[j]);
+  }, len, scale_factor);
 }
 
 long double calcChecksum(Real_ptr ptr, Size_type len,
                          Real_type scale_factor)
 {
-  long double tchk = 0.0;
-  long double ckahan = 0.0;
-  for (Size_type j = 0; j < len; ++j) {
-    long double x = (std::abs(std::sin(j+1.0))+0.5) * ptr[j];
-    long double y = x - ckahan;
-    volatile long double t = tchk + y;
-    volatile long double z = t - tchk;
-    ckahan = z - y;
-    tchk = t;
-#if 0 // RDH DEBUG
-    if ( (j % 100) == 0 ) {
-      getCout() << "j : tchk = " << j << " : " << tchk << std::endl;
-    }
-#endif
-  }
-  tchk *= scale_factor;
-  return tchk;
+  return calcChecksumImpl([=](Size_type j) {
+    return static_cast<long double>(ptr[j]);
+  }, len, scale_factor);
 }
 
 long double calcChecksum(Complex_ptr ptr, Size_type len,
                          Real_type scale_factor)
 {
-  long double tchk = 0.0;
-  long double ckahan = 0.0;
-  for (Size_type j = 0; j < len; ++j) {
-    long double x = (std::abs(std::sin(j+1.0))+0.5) * (real(ptr[j])+imag(ptr[j]));
-    long double y = x - ckahan;
-    volatile long double t = tchk + y;
-    volatile long double z = t - tchk;
-    ckahan = z - y;
-    tchk = t;
-#if 0 // RDH DEBUG
-    if ( (j % 100) == 0 ) {
-      getCout() << "j : tchk = " << j << " : " << tchk << std::endl;
-    }
-#endif
-  }
-  tchk *= scale_factor;
-  return tchk;
+  return calcChecksumImpl([=](Size_type j) {
+    return static_cast<long double>(real(ptr[j])+imag(ptr[j]));
+  }, len, scale_factor);
 }
 
 }  // closing brace for detail namespace
@@ -624,6 +683,7 @@ DataSpace hostCopyDataSpace(DataSpace dataSpace)
     case DataSpace::HipManaged:
     case DataSpace::HipManagedAdviseFine:
     case DataSpace::HipManagedAdviseCoarse:
+    case DataSpace::SyclPinned:
       return dataSpace;
 
     case DataSpace::OmpTarget:
@@ -638,6 +698,10 @@ DataSpace hostCopyDataSpace(DataSpace dataSpace)
     case DataSpace::HipDevice:
     case DataSpace::HipDeviceFine:
       return DataSpace::HipPinned;
+
+    case DataSpace::SyclManaged:
+    case DataSpace::SyclDevice:
+      return DataSpace::SyclPinned;
 
     default:
     {
@@ -677,6 +741,8 @@ DataSpace hostAccessibleDataSpace(DataSpace dataSpace)
     case DataSpace::HipManagedAdviseCoarse:
     case DataSpace::HipDevice:
     case DataSpace::HipDeviceFine:
+    case DataSpace::SyclPinned:
+    case DataSpace::SyclManaged:
       return dataSpace;
 
     case DataSpace::OmpTarget:
@@ -684,6 +750,9 @@ DataSpace hostAccessibleDataSpace(DataSpace dataSpace)
 
     case DataSpace::CudaDevice:
       return DataSpace::CudaPinned;
+
+    case DataSpace::SyclDevice:
+      return DataSpace::SyclPinned;
 
     default:
     {

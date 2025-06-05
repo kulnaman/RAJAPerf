@@ -1,5 +1,5 @@
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~//
-// Copyright (c) 2017-24, Lawrence Livermore National Security, LLC
+// Copyright (c) 2017-25, Lawrence Livermore National Security, LLC
 // and RAJA Performance Suite project contributors.
 // See the RAJAPerf/LICENSE file for details.
 //
@@ -21,6 +21,7 @@
 #include "basic/COPY8.hpp"
 #include "basic/DAXPY.hpp"
 #include "basic/DAXPY_ATOMIC.hpp"
+#include "basic/EMPTY.hpp"
 #include "basic/IF_QUAD.hpp"
 #include "basic/INDEXLIST.hpp"
 #include "basic/INDEXLIST_3LOOP.hpp"
@@ -35,6 +36,7 @@
 #include "basic/REDUCE3_INT.hpp"
 #include "basic/REDUCE_STRUCT.hpp"
 #include "basic/TRAP_INT.hpp"
+#include "basic/MULTI_REDUCE.hpp"
 
 //
 // Lcals kernels...
@@ -85,11 +87,13 @@
 #include "apps/DIFFUSION3DPA.hpp"
 #include "apps/EDGE3D.hpp"
 #include "apps/ENERGY.hpp"
+#include "apps/FEMSWEEP.hpp"
 #include "apps/FIR.hpp"
 #include "apps/LTIMES.hpp"
 #include "apps/LTIMES_NOVIEW.hpp"
 #include "apps/MASS3DEA.hpp"
 #include "apps/MASS3DPA.hpp"
+#include "apps/MATVEC_3D_STENCIL.hpp"
 #include "apps/NODAL_ACCUMULATION_3D.hpp"
 #include "apps/PRESSURE.hpp"
 #include "apps/VOL3D.hpp"
@@ -104,6 +108,8 @@
 #include "algorithm/REDUCE_SUM.hpp"
 #include "algorithm/MEMSET.hpp"
 #include "algorithm/MEMCPY.hpp"
+#include "algorithm/ATOMIC.hpp"
+#include "algorithm/HISTOGRAM.hpp"
 
 //
 // Comm kernels...
@@ -171,6 +177,7 @@ static const std::string KernelNames [] =
   std::string("Basic_COPY8"),
   std::string("Basic_DAXPY"),
   std::string("Basic_DAXPY_ATOMIC"),
+  std::string("Basic_EMPTY"),
   std::string("Basic_IF_QUAD"),
   std::string("Basic_INDEXLIST"),
   std::string("Basic_INDEXLIST_3LOOP"),
@@ -185,6 +192,7 @@ static const std::string KernelNames [] =
   std::string("Basic_REDUCE3_INT"),
   std::string("Basic_REDUCE_STRUCT"),
   std::string("Basic_TRAP_INT"),
+  std::string("Basic_MULTI_REDUCE"),
 
 //
 // Lcals kernels...
@@ -235,11 +243,13 @@ static const std::string KernelNames [] =
   std::string("Apps_DIFFUSION3DPA"),
   std::string("Apps_EDGE3D"),
   std::string("Apps_ENERGY"),
+  std::string("Apps_FEMSWEEP"),
   std::string("Apps_FIR"),
   std::string("Apps_LTIMES"),
   std::string("Apps_LTIMES_NOVIEW"),
   std::string("Apps_MASS3DEA"),
   std::string("Apps_MASS3DPA"),
+  std::string("Apps_MATVEC_3D_STENCIL"),
   std::string("Apps_NODAL_ACCUMULATION_3D"),
   std::string("Apps_PRESSURE"),
   std::string("Apps_VOL3D"),
@@ -254,6 +264,8 @@ static const std::string KernelNames [] =
   std::string("Algorithm_REDUCE_SUM"),
   std::string("Algorithm_MEMSET"),
   std::string("Algorithm_MEMCPY"),
+  std::string("Algorithm_ATOMIC"),
+  std::string("Algorithm_HISTOGRAM"),
 
 //
 // Comm kernels...
@@ -294,8 +306,8 @@ static const std::string VariantNames [] =
   std::string("Lambda_OpenMP"),
   std::string("RAJA_OpenMP"),
 
-  std::string("Base_OMPTarget"),
-  std::string("RAJA_OMPTarget"),
+  std::string("Base_OpenMPTarget"),
+  std::string("RAJA_OpenMPTarget"),
 
   std::string("Base_CUDA"),
   std::string("Lambda_CUDA"),
@@ -306,6 +318,9 @@ static const std::string VariantNames [] =
   std::string("RAJA_HIP"),
 
   std::string("Kokkos_Lambda"),
+
+  std::string("Base_SYCL"),
+  std::string("RAJA_SYCL"),
 
   std::string("Unknown Variant")  // Keep this at the end and DO NOT remove....
 
@@ -352,6 +367,33 @@ static const std::string FeatureNames [] =
 /*!
  *******************************************************************************
  *
+ * \brief Array of names for each COMPLEXITY used in suite.
+ *
+ * IMPORTANT: This is only modified when a new complexity is used in suite.
+ *
+ *            IT MUST BE KEPT CONSISTENT (CORRESPONDING ONE-TO-ONE) WITH
+ *            ITEMS IN THE Complexity enum IN HEADER FILE!!!
+ *
+ *******************************************************************************
+ */
+static const std::string ComplexityNames [] =
+{
+  std::string("N"),
+
+  std::string("NlogN"),
+
+  std::string("N^(3/2)"),
+
+  std::string("N^(2/3)"),
+
+  std::string("Unknown Complexity")  // Keep this at the end and DO NOT remove....
+
+}; // END ComplexityNames
+
+
+/*!
+ *******************************************************************************
+ *
  * \brief Array of names for each Memory Space in suite.
  *
  * IMPORTANT: This is only modified when a new memory space is added to the suite.
@@ -387,6 +429,10 @@ static const std::string DataSpaceNames [] =
   std::string("HipManagedAdviseCoarse"),
   std::string("HipDevice"),
   std::string("HipDeviceFine"),
+
+  std::string("SyclPinned"),
+  std::string("SyclManaged"),
+  std::string("SyclDevice"),
 
   std::string("Unknown Memory"), // Keep this at the end and DO NOT remove....
 
@@ -509,6 +555,13 @@ bool isVariantAvailable(VariantID vid)
   }
 #endif
 
+#if defined(RAJA_ENABLE_SYCL)
+  if ( vid == Base_SYCL ||
+       vid == RAJA_SYCL ) {
+    ret_val = true;
+  }
+#endif
+
   return ret_val;
 }
 
@@ -570,6 +623,13 @@ bool isVariantGPU(VariantID vid)
   }
 #endif
 
+#if defined(RAJA_ENABLE_SYCL)
+  if ( vid == Base_SYCL ||
+       vid == RAJA_SYCL ) {
+    ret_val = true;
+  }
+#endif
+
   return ret_val;
 }
 
@@ -583,6 +643,19 @@ bool isVariantGPU(VariantID vid)
 const std::string& getFeatureName(FeatureID fid)
 {
   return FeatureNames[fid];
+}
+
+
+/*
+ *******************************************************************************
+ *
+ * Return complexity name associated with Complexity enum value.
+ *
+ *******************************************************************************
+ */
+const std::string& getComplexityName(Complexity ac)
+{
+  return ComplexityNames[static_cast<int>(ac)];
 }
 
 
@@ -610,17 +683,24 @@ bool isDataSpaceAvailable(DataSpace dataSpace)
   bool ret_val = false;
 
   switch (dataSpace) {
-    case DataSpace::Host:
-      ret_val = true; break;
+
+    case DataSpace::Host: {
+      ret_val = true;
+      break;
+    }
 
 #if defined(RAJA_ENABLE_OPENMP) && defined(RUN_OPENMP)
-    case DataSpace::Omp:
-      ret_val = true; break;
+    case DataSpace::Omp: {
+      ret_val = true;
+      break;
+    }
 #endif
 
 #if defined(RAJA_ENABLE_TARGET_OPENMP)
-    case DataSpace::OmpTarget:
-      ret_val = true; break;
+    case DataSpace::OmpTarget: {
+      ret_val = true;
+      break;
+    }
 #endif
 
 #if defined(RAJA_ENABLE_CUDA)
@@ -630,8 +710,10 @@ bool isDataSpaceAvailable(DataSpace dataSpace)
     case DataSpace::CudaManagedDevicePreferred:
     case DataSpace::CudaManagedHostPreferredDeviceAccessed:
     case DataSpace::CudaManagedDevicePreferredHostAccessed:
-    case DataSpace::CudaDevice:
-      ret_val = true; break;
+    case DataSpace::CudaDevice: {
+      ret_val = true;
+      break;
+    }
 #endif
 
 #if defined(RAJA_ENABLE_HIP)
@@ -648,13 +730,27 @@ bool isDataSpaceAvailable(DataSpace dataSpace)
     case DataSpace::HipManagedAdviseCoarse:
 #endif
     case DataSpace::HipDevice:
-    case DataSpace::HipDeviceFine:
-      ret_val = true; break;
+    case DataSpace::HipDeviceFine: {
+      ret_val = true;
+      break;
+    } 
 #endif
 
-    default:
-      ret_val = false; break;
-  }
+#if defined(RAJA_ENABLE_SYCL)
+    case DataSpace::SyclPinned:
+    case DataSpace::SyclManaged:
+    case DataSpace::SyclDevice: {
+      ret_val = true;
+      break;
+    }
+#endif
+
+    default: {
+      ret_val = false;
+      break;
+    }
+
+  } // close switch (dataSpace)
 
   return ret_val;
 }
@@ -671,10 +767,16 @@ bool isPseudoDataSpace(DataSpace dataSpace)
   bool ret_val = false;
 
   switch (dataSpace) {
-    case DataSpace::Copy:
-      ret_val = true; break;
-    default:
-      ret_val = false; break;
+
+    case DataSpace::Copy: {
+      ret_val = true;
+      break;
+    }
+    default: {
+      ret_val = false;
+      break;
+    }
+
   }
 
   return ret_val;
@@ -711,6 +813,10 @@ KernelBase* getKernelObject(KernelID kid,
     }
     case Basic_DAXPY_ATOMIC : {
        kernel = new basic::DAXPY_ATOMIC(run_params);
+       break;
+    }
+    case Basic_EMPTY : {
+       kernel = new basic::EMPTY(run_params);
        break;
     }
     case Basic_IF_QUAD : {
@@ -767,6 +873,10 @@ KernelBase* getKernelObject(KernelID kid,
     } 	
     case Basic_TRAP_INT : {
        kernel = new basic::TRAP_INT(run_params);
+       break;
+    }
+    case Basic_MULTI_REDUCE : {
+       kernel = new basic::MULTI_REDUCE(run_params);
        break;
     }
 
@@ -922,6 +1032,10 @@ KernelBase* getKernelObject(KernelID kid,
        kernel = new apps::ENERGY(run_params);
        break;
     }
+    case Apps_FEMSWEEP : {
+       kernel = new apps::FEMSWEEP(run_params);
+       break;
+    }
     case Apps_FIR : {
        kernel = new apps::FIR(run_params);
        break;
@@ -940,6 +1054,10 @@ KernelBase* getKernelObject(KernelID kid,
     }      
     case Apps_MASS3DPA : {
        kernel = new apps::MASS3DPA(run_params);
+       break;
+    }
+    case Apps_MATVEC_3D_STENCIL : {
+       kernel = new apps::MATVEC_3D_STENCIL(run_params);
        break;
     }
     case Apps_NODAL_ACCUMULATION_3D : {
@@ -986,6 +1104,14 @@ KernelBase* getKernelObject(KernelID kid,
        kernel = new algorithm::MEMCPY(run_params);
        break;
     }
+    case Algorithm_ATOMIC: {
+       kernel = new algorithm::ATOMIC(run_params);
+       break;
+    }
+    case Algorithm_HISTOGRAM: {
+       kernel = new algorithm::HISTOGRAM(run_params);
+       break;
+    }
 
 //
 // Comm kernels...
@@ -1021,6 +1147,7 @@ KernelBase* getKernelObject(KernelID kid,
 
   return kernel;
 }
+
 
 // subclass of streambuf that ignores overflow
 // never printing anything to the underlying stream

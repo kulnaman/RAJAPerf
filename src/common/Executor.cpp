@@ -1,5 +1,5 @@
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~//
-// Copyright (c) 2017-24, Lawrence Livermore National Security, LLC
+// Copyright (c) 2017-25, Lawrence Livermore National Security, LLC
 // and RAJA Performance Suite project contributors.
 // See the RAJAPerf/LICENSE file for details.
 //
@@ -42,7 +42,11 @@
 #include <cmath>
 #include <algorithm>
 
+#if defined(_WIN32)
+#include<direct.h>
+#else
 #include <unistd.h>
+#endif
 
 
 namespace rajaperf {
@@ -124,12 +128,13 @@ Executor::Executor(int argc, char** argv)
 {
 #if defined(RAJA_PERFSUITE_USE_CALIPER)
   configuration cc;
-  adiak::init(NULL);
-  adiak::user();
-  adiak::launchdate();
-  adiak::libraries();
-  adiak::cmdline();
-  adiak::clustername();
+  #if defined(RAJA_PERFSUITE_ENABLE_MPI)
+    MPI_Comm adiak_comm = MPI_COMM_WORLD;
+    adiak::init(&adiak_comm);
+  #else
+    adiak::init(nullptr);
+  #endif
+  adiak::collect_all();
   adiak::value("perfsuite_version", cc.adiak_perfsuite_version);
   adiak::value("raja_version", cc.adiak_raja_version);
   adiak::value("cmake_build_type", cc.adiak_cmake_build_type);
@@ -168,8 +173,20 @@ Executor::Executor(int argc, char** argv)
   if (strlen(cc.adiak_cmake_hip_architectures) > 0) {
     adiak::value("cmake_hip_architectures", cc.adiak_cmake_hip_architectures);
   }
-  if (cc.adiak_gpu_targets_block_sizes.size() > 0) {
-    adiak::value("gpu_targets_block_sizes", cc.adiak_gpu_targets_block_sizes);
+  if (strlen(cc.adiak_tuning_cuda_arch) > 0) {
+    adiak::value("tuning_cuda_arch", cc.adiak_tuning_cuda_arch);
+  }
+  if (strlen(cc.adiak_tuning_hip_arch) > 0) {
+    adiak::value("tuning_hip_arch", cc.adiak_tuning_hip_arch);
+  }
+  if (cc.adiak_gpu_block_sizes.size() > 0) {
+    adiak::value("gpu_block_sizes", cc.adiak_gpu_block_sizes);
+  }
+  if (cc.adiak_atomic_replications.size() > 0) {
+    adiak::value("atomic_replications", cc.adiak_atomic_replications);
+  }
+  if (cc.adiak_gpu_items_per_thread.size() > 0) {
+    adiak::value("gpu_items_per_thread", cc.adiak_gpu_items_per_thread);
   }
   if (cc.adiak_raja_hipcc_flags.size() > 0) {
     adiak::value("raja_hipcc_flags", cc.adiak_raja_hipcc_flags);
@@ -319,7 +336,8 @@ void Executor::setupSuite()
       KernelBase::setCaliperMgrVariantTuning(vid,
                                              tstr,
                                              run_params.getOutputDirName(),
-                                             run_params.getAddToSpotConfig());
+                                             run_params.getAddToSpotConfig(),
+                                             run_params.getAddToCaliperConfig());
 #endif
     }
 
@@ -419,6 +437,9 @@ void Executor::reportRunSummary(ostream& str) const
     if (isVariantAvailable(VariantID::Base_HIP)) {
       str << "\nHip - " << getDataSpaceName(run_params.getHipDataSpace());
     }
+    if (isVariantAvailable(VariantID::Base_SYCL)) {
+      str << "\nSycl - " << getDataSpaceName(run_params.getSyclDataSpace());
+    }
     if (isVariantAvailable(VariantID::Kokkos_Lambda)) {
       str << "\nKokkos - " << getDataSpaceName(run_params.getKokkosDataSpace());
     }
@@ -507,15 +528,21 @@ void Executor::writeKernelInfoSummary(ostream& str, bool to_file) const
   Index_type itsrep_width = 0;
   Index_type bytesrep_width = 0;
   Index_type flopsrep_width = 0;
+  Index_type bytesReadrep_width = 0;
+  Index_type bytesWrittenrep_width = 0;
+  Index_type bytesAtomicModifyWrittenrep_width = 0;
   Index_type dash_width = 0;
 
   for (size_t ik = 0; ik < kernels.size(); ++ik) {
     kercol_width = max(kercol_width, kernels[ik]->getName().size());
     psize_width = max(psize_width, kernels[ik]->getActualProblemSize());
     reps_width = max(reps_width, kernels[ik]->getRunReps());
-    itsrep_width = max(reps_width, kernels[ik]->getItsPerRep());
+    itsrep_width = max(itsrep_width, kernels[ik]->getItsPerRep());
     bytesrep_width = max(bytesrep_width, kernels[ik]->getBytesPerRep());
-    flopsrep_width = max(bytesrep_width, kernels[ik]->getFLOPsPerRep());
+    flopsrep_width = max(flopsrep_width, kernels[ik]->getFLOPsPerRep());
+    bytesReadrep_width = max(bytesReadrep_width, kernels[ik]->getBytesReadPerRep());
+    bytesWrittenrep_width = max(bytesWrittenrep_width, kernels[ik]->getBytesWrittenPerRep());
+    bytesAtomicModifyWrittenrep_width = max(bytesAtomicModifyWrittenrep_width, kernels[ik]->getBytesAtomicModifyWrittenPerRep());
   }
 
   const string sepchr(" , ");
@@ -559,6 +586,24 @@ void Executor::writeKernelInfoSummary(ostream& str, bool to_file) const
                          static_cast<Index_type>(frsize) ) + 3;
   dash_width += flopsrep_width + static_cast<Index_type>(sepchr.size());
 
+  double brrsize = log10( static_cast<double>(bytesReadrep_width) );
+  string bytesReadrep_head("BytesRead/rep");
+  bytesReadrep_width = max( static_cast<Index_type>(bytesReadrep_head.size()),
+                        static_cast<Index_type>(brrsize) ) + 3;
+  dash_width += bytesReadrep_width + static_cast<Index_type>(sepchr.size());
+
+  double bwrsize = log10( static_cast<double>(bytesWrittenrep_width) );
+  string bytesWrittenrep_head("BytesWritten/rep");
+  bytesWrittenrep_width = max( static_cast<Index_type>(bytesWrittenrep_head.size()),
+                        static_cast<Index_type>(bwrsize) ) + 3;
+  dash_width += bytesWrittenrep_width + static_cast<Index_type>(sepchr.size());
+
+  double bamrrsize = log10( static_cast<double>(bytesAtomicModifyWrittenrep_width) );
+  string bytesAtomicModifyWrittenrep_head("BytesAtomicModifyWritten/rep");
+  bytesAtomicModifyWrittenrep_width = max( static_cast<Index_type>(bytesAtomicModifyWrittenrep_head.size()),
+                        static_cast<Index_type>(bamrrsize) ) + 3;
+  dash_width += bytesAtomicModifyWrittenrep_width + static_cast<Index_type>(sepchr.size());
+
   str <<left<< setw(kercol_width) << kern_head
       << sepchr <<right<< setw(psize_width) << psize_head
       << sepchr <<right<< setw(reps_width) << rsize_head
@@ -566,6 +611,9 @@ void Executor::writeKernelInfoSummary(ostream& str, bool to_file) const
       << sepchr <<right<< setw(kernsrep_width) << kernsrep_head
       << sepchr <<right<< setw(bytesrep_width) << bytesrep_head
       << sepchr <<right<< setw(flopsrep_width) << flopsrep_head
+      << sepchr <<right<< setw(bytesReadrep_width) << bytesReadrep_head
+      << sepchr <<right<< setw(bytesWrittenrep_width) << bytesWrittenrep_head
+      << sepchr <<right<< setw(bytesAtomicModifyWrittenrep_width) << bytesAtomicModifyWrittenrep_head
       << endl;
 
   if ( !to_file ) {
@@ -584,6 +632,9 @@ void Executor::writeKernelInfoSummary(ostream& str, bool to_file) const
         << sepchr <<right<< setw(kernsrep_width) << kern->getKernelsPerRep()
         << sepchr <<right<< setw(bytesrep_width) << kern->getBytesPerRep()
         << sepchr <<right<< setw(flopsrep_width) << kern->getFLOPsPerRep()
+        << sepchr <<right<< setw(bytesReadrep_width) << kern->getBytesReadPerRep()
+        << sepchr <<right<< setw(bytesWrittenrep_width) << kern->getBytesWrittenPerRep()
+        << sepchr <<right<< setw(bytesAtomicModifyWrittenrep_width) << kern->getBytesAtomicModifyWrittenPerRep()
         << endl;
   }
 
@@ -683,63 +734,76 @@ void Executor::runWarmupKernels()
   getCout() << "\n\nRun warmup kernels...\n";
 
   //
-  // For kernels to be run, assemble a set of feature IDs
+  // Get warmup kernels to run from input
   //
-  std::set<FeatureID> feature_ids;
-  for (size_t ik = 0; ik < kernels.size(); ++ik) {
-    KernelBase* kernel = kernels[ik];
+  std::set<KernelID> kernel_ids = run_params.getWarmupKernelIDsToRun();
 
-    for (size_t fid = 0; fid < NumFeatures; ++fid) {
-      FeatureID tfid = static_cast<FeatureID>(fid);
-      if (kernel->usesFeature(tfid) ) {
-         feature_ids.insert( tfid );
+  if ( kernel_ids.empty() ) {
+
+    //
+    // If no warmup kernels were given, choose a warmup kernel for each feature
+    //
+
+    //
+    // For kernels to be run, assemble a set of feature IDs
+    //
+    std::set<FeatureID> feature_ids;
+    for (size_t ik = 0; ik < kernels.size(); ++ik) {
+      KernelBase* kernel = kernels[ik];
+
+      for (size_t fid = 0; fid < NumFeatures; ++fid) {
+        FeatureID tfid = static_cast<FeatureID>(fid);
+        if (kernel->usesFeature(tfid) ) {
+           feature_ids.insert( tfid );
+        }
       }
-    }
-  
-  } // iterate over kernels
 
-  //
-  // Map feature IDs to set of warmup kernel IDs
-  //
-  std::set<KernelID> kernel_ids;
-  for ( auto fid = feature_ids.begin(); fid != feature_ids.end(); ++ fid ) {
+    } // iterate over kernels
 
-    switch (*fid) {
+    //
+    // Map feature IDs to set of warmup kernel IDs
+    //
+    for ( auto fid = feature_ids.begin(); fid != feature_ids.end(); ++ fid ) {
 
-      case Forall:
-      case Kernel:
-      case Launch:
-        kernel_ids.insert(Basic_DAXPY); break;
+      switch (*fid) {
 
-      case Sort:
-        kernel_ids.insert(Algorithm_SORT); break;
-   
-      case Scan:
-        kernel_ids.insert(Basic_INDEXLIST_3LOOP); break;
+        case Forall:
+        case Kernel:
+        case Launch:
+          kernel_ids.insert(Basic_DAXPY); break;
 
-      case Workgroup:
-        kernel_ids.insert(Comm_HALO_PACKING_FUSED); break;
+        case Sort:
+          kernel_ids.insert(Algorithm_SORT); break;
 
-      case Reduction:
-        kernel_ids.insert(Basic_REDUCE3_INT); break;
+        case Scan:
+          kernel_ids.insert(Basic_INDEXLIST_3LOOP); break;
 
-      case Atomic:
-        kernel_ids.insert(Basic_PI_ATOMIC); break; 
+        case Workgroup:
+          kernel_ids.insert(Comm_HALO_PACKING_FUSED); break;
 
-      case View:
-        break;
+        case Reduction:
+          kernel_ids.insert(Basic_REDUCE3_INT); break;
 
-#ifdef RAJA_PERFSUITE_ENABLE_MPI
-      case MPI:
-        kernel_ids.insert(Comm_HALO_EXCHANGE_FUSED); break;
-#endif
+        case Atomic:
+          kernel_ids.insert(Basic_PI_ATOMIC); break;
 
-      default:
-        break;
+        case View:
+          break;
+
+  #ifdef RAJA_PERFSUITE_ENABLE_MPI
+        case MPI:
+          kernel_ids.insert(Comm_HALO_EXCHANGE_FUSED); break;
+  #endif
+
+        default:
+          break;
+
+      }
 
     }
 
   }
+
 
   //
   // Run warmup kernels
@@ -774,7 +838,11 @@ void Executor::outputRunData()
   string out_fprefix;
   string outdir = recursiveMkdir(run_params.getOutputDirName());
   if ( !outdir.empty() ) {
+#if defined(_WIN32)
+    _chdir(outdir.c_str());
+#else
     chdir(outdir.c_str());
+#endif
   }
   out_fprefix = "./" + run_params.getOutputFilePrefix();
 

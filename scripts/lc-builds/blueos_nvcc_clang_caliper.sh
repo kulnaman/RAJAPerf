@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 ###############################################################################
-# Copyright (c) 2017-24, Lawrence Livermore National Security, LLC
+# Copyright (c) 2017-25, Lawrence Livermore National Security, LLC
 # and RAJA project contributors. See the RAJAPerf/LICENSE file for details.
 #
 # SPDX-License-Identifier: (BSD-3-Clause)
@@ -17,7 +17,7 @@ if [[ $# -lt 5 ]]; then
   echo "   5) path to adiak cmake directory"
   echo
   echo "For example: "
-  echo "    blueos_nvcc_clang_caliper.sh 10.2.89 70 10.0.1 /usr/workspace/wsb/asde/caliper-lassen/share/cmake/caliper /usr/workspace/wsb/asde/adiak-lassen/lib/cmake/adiak"
+  echo "    blueos_nvcc_clang_caliper.sh 10.2.89 70 10.0.1 /usr/workspace/wsb/asde/caliper-lassen/share/cmake/caliper /usr/workspace/wsb/asde/caliper-lassen/lib/cmake/adiak"
   exit
 fi
 
@@ -40,7 +40,7 @@ echo
 rm -rf build_${BUILD_SUFFIX} >/dev/null
 mkdir build_${BUILD_SUFFIX} && cd build_${BUILD_SUFFIX}
 
-module load cmake/3.20.2
+module load cmake/3.23.1
 
 cmake \
   -DCMAKE_BUILD_TYPE=Release \

@@ -1,5 +1,5 @@
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~//
-// Copyright (c) 2017-24, Lawrence Livermore National Security, LLC
+// Copyright (c) 2017-25, Lawrence Livermore National Security, LLC
 // and RAJA Performance Suite project contributors.
 // See the RAJAPerf/LICENSE file for details.
 //
@@ -25,6 +25,11 @@
 #if defined(RAJA_ENABLE_HIP)
 #include "RAJA/policy/hip/raja_hiperrchk.hpp"
 #endif
+#if defined(RAJA_ENABLE_SYCL)
+#include "RAJA/util/sycl_compat.hpp"
+#endif
+
+#include "camp/resource.hpp"
 
 #include <string>
 #include <vector>
@@ -97,9 +102,12 @@ public:
   void setDefaultReps(Index_type reps) { default_reps = reps; }
   void setItsPerRep(Index_type its) { its_per_rep = its; };
   void setKernelsPerRep(Index_type nkerns) { kernels_per_rep = nkerns; };
-  void setBytesPerRep(Index_type bytes) { bytes_per_rep = bytes;}
+  void setBytesReadPerRep(Index_type bytes) { bytes_read_per_rep = bytes;}
+  void setBytesWrittenPerRep(Index_type bytes) { bytes_written_per_rep = bytes;}
+  void setBytesAtomicModifyWrittenPerRep(Index_type bytes) { bytes_atomic_modify_written_per_rep = bytes;}
   void setFLOPsPerRep(Index_type FLOPs) { FLOPs_per_rep = FLOPs; }
   void setBlockSize(Index_type size) { kernel_block_size = size; }
+  void setComplexity(Complexity ac) { complexity = ac; }
 
   void setUsesFeature(FeatureID fid) { uses_feature[fid] = true; }
 
@@ -134,6 +142,11 @@ public:
   virtual void setKokkosTuningDefinitions(VariantID vid)
   { addVariantTuningName(vid, getDefaultTuningName()); }
 #endif
+#if defined(RAJA_ENABLE_SYCL)
+  virtual void setSyclTuningDefinitions(VariantID vid)
+  { addVariantTuningName(vid, getDefaultTuningName()); }
+#endif
+
 
   //
   // Getter methods used to generate kernel execution summary
@@ -145,9 +158,13 @@ public:
   Index_type getDefaultReps() const { return default_reps; }
   Index_type getItsPerRep() const { return its_per_rep; };
   Index_type getKernelsPerRep() const { return kernels_per_rep; };
-  Index_type getBytesPerRep() const { return bytes_per_rep; }
+  Index_type getBytesPerRep() const { return bytes_read_per_rep + bytes_written_per_rep + 2*bytes_atomic_modify_written_per_rep; } // count atomic_modify_write operations as a read and a write to match previous counting
+  Index_type getBytesReadPerRep() const { return bytes_read_per_rep; }
+  Index_type getBytesWrittenPerRep() const { return bytes_written_per_rep; }
+  Index_type getBytesAtomicModifyWrittenPerRep() const { return bytes_atomic_modify_written_per_rep; }
   Index_type getFLOPsPerRep() const { return FLOPs_per_rep; }
   double getBlockSize() const { return kernel_block_size; }
+  Complexity getComplexity() const { return complexity; };
 
   Index_type getTargetProblemSize() const;
   Index_type getRunReps() const;
@@ -221,6 +238,11 @@ public:
 
   void execute(VariantID vid, size_t tune_idx);
 
+  camp::resources::Host getHostResource()
+  {
+    return camp::resources::Host::get_default();
+  }
+
 #if defined(RAJA_ENABLE_CUDA)
   camp::resources::Cuda getCudaResource()
   {
@@ -230,6 +252,7 @@ public:
     return camp::resources::Cuda::get_default();
   }
 #endif
+
 #if defined(RAJA_ENABLE_HIP)
   camp::resources::Hip getHipResource()
   {
@@ -237,6 +260,25 @@ public:
       return camp::resources::Hip::HipFromStream(0);
     }
     return camp::resources::Hip::get_default();
+  }
+#endif
+
+#if defined(RAJA_ENABLE_SYCL)
+  camp::resources::Sycl getSyclResource()
+  {
+    /*
+    if (run_params.getGPUStream() == 0) {
+      return camp::resources::Sycl::SyclFromStream(0);
+    }
+    */
+    return camp::resources::Sycl::get_default();
+  }
+#endif
+
+#if defined(RAJA_ENABLE_TARGET_OPENMP)
+  camp::resources::Omp getOmpTargetResource()
+  {
+    return camp::resources::Omp::get_default();
   }
 #endif
 
@@ -256,6 +298,13 @@ public:
       hipErrchk( hipDeviceSynchronize() );
     }
 #endif
+#if defined(RAJA_ENABLE_SYCL)
+    if ( running_variant == Base_SYCL ||
+         running_variant == RAJA_SYCL ) {
+      getSyclResource().get_queue()->wait();
+    }
+#endif
+
   }
 
   Size_type getDataAlignment() const;
@@ -276,6 +325,21 @@ public:
   {
     rajaperf::allocAndInitData(dataSpace,
         ptr, len, getDataAlignment());
+  }
+
+  template <typename T>
+  void allocAndInitDataConst(DataSpace dataSpace, T*& ptr, Size_type len, T val)
+  {
+    rajaperf::allocAndInitDataConst(dataSpace,
+        ptr, len, getDataAlignment(), val);
+  }
+
+  template <typename T>
+  rajaperf::AutoDataMover<T> scopedMoveData(DataSpace dataSpace, T*& ptr, Size_type len)
+  {
+    DataSpace hds = rajaperf::hostCopyDataSpace(dataSpace);
+    rajaperf::moveData(hds, dataSpace, ptr, len, getDataAlignment());
+    return {dataSpace, hds, ptr, len, getDataAlignment()};
   }
 
   template <typename T>
@@ -300,6 +364,19 @@ public:
   }
 
   template <typename T>
+  void allocAndCopyHostData(T*& dst_ptr,
+                            const T* src_ptr,
+                            Size_type len,
+                            VariantID vid)
+  {
+    rajaperf::allocData(getDataSpace(vid),
+        dst_ptr, len, getDataAlignment());
+
+    rajaperf::copyData(getDataSpace(vid),
+        dst_ptr, DataSpace::Host, src_ptr, len);
+  }
+
+  template <typename T>
   void allocAndInitData(T*& ptr, Size_type len, VariantID vid)
   {
     rajaperf::allocAndInitData(getDataSpace(vid),
@@ -314,6 +391,13 @@ public:
   }
 
   template <typename T>
+  void allocAndInitDataConst(T*& ptr, Size_type len, T val, DataSpace dataSpace)
+  {
+    rajaperf::allocAndInitDataConst(dataSpace,
+        ptr, len, getDataAlignment(), val);
+  }
+
+  template <typename T>
   void allocAndInitDataRandSign(T*& ptr, Size_type len, VariantID vid)
   {
     rajaperf::allocAndInitDataRandSign(getDataSpace(vid),
@@ -324,6 +408,13 @@ public:
   void allocAndInitDataRandValue(T*& ptr, Size_type len, VariantID vid)
   {
     rajaperf::allocAndInitDataRandValue(getDataSpace(vid),
+        ptr, len, getDataAlignment());
+  }
+
+  template <typename T>
+  void allocAndInitDataRandValue(T*& ptr, Size_type len, DataSpace dataSpace)
+  {
+    rajaperf::allocAndInitDataRandValue(dataSpace,
         ptr, len, getDataAlignment());
   }
 
@@ -422,12 +513,20 @@ public:
   virtual void runOpenMPTargetVariant(VariantID vid, size_t tune_idx) = 0;
 #endif
 
+#if defined(RAJA_ENABLE_SYCL)
+  virtual void runSyclVariant(VariantID vid, size_t tune_idx)
+  {
+     getCout() << "\n KernelBase: Unimplemented Sycl variant id = " << vid << std::endl;
+  }
+#endif
+
 #if defined(RUN_KOKKOS)
   virtual void runKokkosVariant(VariantID vid, size_t tune_idx)
   {
      getCout() << "\n KernelBase: Unimplemented Kokkos variant id = " << vid << std::endl;
   }
 #endif
+
 
 #if defined(RAJA_PERFSUITE_USE_CALIPER)
   void caliperOn() { doCaliperTiming = true; }
@@ -437,7 +536,8 @@ public:
   static void setCaliperMgrVariantTuning(VariantID vid,
                                     std::string tstr,
                                     const std::string& outdir,
-                                    const std::string& addToConfig);
+                                    const std::string& addToSpotConfig,
+                                    const std::string& addToCaliConfig);
 
   static void setCaliperMgrStart(VariantID vid, std::string tstr) { mgr[vid][tstr].start(); }
   static void setCaliperMgrStop(VariantID vid, std::string tstr) { mgr[vid][tstr].stop(); }
@@ -491,6 +591,8 @@ private:
 
   bool uses_feature[NumFeatures];
 
+  Complexity complexity;
+
   std::vector<std::string> variant_tuning_names[NumVariants];
 
   //
@@ -498,7 +600,9 @@ private:
   //
   Index_type its_per_rep;
   Index_type kernels_per_rep;
-  Index_type bytes_per_rep;
+  Index_type bytes_read_per_rep;
+  Index_type bytes_written_per_rep;
+  Index_type bytes_atomic_modify_written_per_rep;
   Index_type FLOPs_per_rep;
   double kernel_block_size = nan(""); // Set default value for non GPU kernels
 
@@ -517,8 +621,13 @@ private:
   cali_id_t Iters_Rep_attr;
   cali_id_t Kernels_Rep_attr;
   cali_id_t Bytes_Rep_attr;
+  cali_id_t Bytes_Read_Rep_attr;
+  cali_id_t Bytes_Written_Rep_attr;
+  cali_id_t Bytes_AtomicModifyWritten_Rep_attr;
   cali_id_t Flops_Rep_attr;
   cali_id_t BlockSize_attr;
+  std::map<std::string, cali_id_t> Feature_attrs;
+  cali_id_t Complexity_attr;
 
 
   // we need a Caliper Manager object per variant

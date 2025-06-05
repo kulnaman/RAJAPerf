@@ -1,5 +1,5 @@
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~//
-// Copyright (c) 2017-24, Lawrence Livermore National Security, LLC
+// Copyright (c) 2017-25, Lawrence Livermore National Security, LLC
 // and RAJA Performance Suite project contributors.
 // See the RAJAPerf/LICENSE file for details.
 //
@@ -20,8 +20,6 @@ namespace comm
 {
 
 Index_type HALO_base::s_grid_dims_default[3] {100, 100, 100};
-Index_type HALO_base::s_halo_width_default = 1;
-Index_type HALO_base::s_num_vars_default = 3;
 
 HALO_base::HALO_base(KernelID kid, const RunParams& params)
   : KernelBase(kid, params)
@@ -30,12 +28,12 @@ HALO_base::HALO_base(KernelID kid, const RunParams& params)
                          s_grid_dims_default[1] *
                          s_grid_dims_default[2] );
 
-  double cbrt_run_size = std::cbrt(getTargetProblemSize());
+  double cbrt_run_size = std::cbrt(getTargetProblemSize()) + std::cbrt(3)-1;
 
   m_grid_dims[0] = cbrt_run_size;
   m_grid_dims[1] = cbrt_run_size;
   m_grid_dims[2] = cbrt_run_size;
-  m_halo_width = s_halo_width_default;
+  m_halo_width = params.getHaloWidth();
 
   m_grid_plus_halo_dims[0] = m_grid_dims[0] + 2*m_halo_width;
   m_grid_plus_halo_dims[1] = m_grid_dims[1] + 2*m_halo_width;

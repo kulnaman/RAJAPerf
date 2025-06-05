@@ -1,5 +1,5 @@
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~//
-// Copyright (c) 2017-24, Lawrence Livermore National Security, LLC
+// Copyright (c) 2017-25, Lawrence Livermore National Security, LLC
 // and RAJA Performance Suite project contributors.
 // See the RAJAPerf/LICENSE file for details.
 //
@@ -189,14 +189,16 @@ void HALO_PACKING_FUSED::runSeqVariantDirect(VariantID vid)
 template < typename dispatch_helper >
 void HALO_PACKING_FUSED::runSeqVariantWorkGroup(VariantID vid)
 {
-  const Index_type run_reps = getRunReps();
-
-  HALO_PACKING_FUSED_DATA_SETUP;
-
   switch ( vid ) {
 
-#if defined(RUN_RAJA_SEQ)
     case RAJA_Seq : {
+
+#if defined(RUN_RAJA_SEQ)
+      auto res{getHostResource()};
+
+      const Index_type run_reps = getRunReps();
+
+      HALO_PACKING_FUSED_DATA_SETUP;
 
       using AllocatorHolder = RAJAPoolAllocatorHolder<
         RAJA::basic_mempool::MemPool<RAJA::basic_mempool::generic_allocator>>;
@@ -250,7 +252,7 @@ void HALO_PACKING_FUSED::runSeqVariantWorkGroup(VariantID vid)
           }
         }
         workgroup group_pack = pool_pack.instantiate();
-        worksite site_pack = group_pack.run();
+        worksite site_pack = group_pack.run(res);
         if (separate_buffers) {
           for (Index_type l = 0; l < num_neighbors; ++l) {
             Index_type len = pack_index_list_lengths[l];
@@ -277,14 +279,14 @@ void HALO_PACKING_FUSED::runSeqVariantWorkGroup(VariantID vid)
           }
         }
         workgroup group_unpack = pool_unpack.instantiate();
-        worksite site_unpack = group_unpack.run();
+        worksite site_unpack = group_unpack.run(res);
 
       }
       stopTimer();
+#endif // RUN_RAJA_SEQ
 
       break;
     }
-#endif // RUN_RAJA_SEQ
 
     default : {
       getCout() << "\n HALO_PACKING_FUSED : Unknown variant id = " << vid << std::endl;

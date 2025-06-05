@@ -1,5 +1,5 @@
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~//
-// Copyright (c) 2017-24, Lawrence Livermore National Security, LLC
+// Copyright (c) 2017-25, Lawrence Livermore National Security, LLC
 // and RAJA Performance Suite project contributors.
 // See the RAJAPerf/LICENSE file for details.
 //
@@ -26,18 +26,27 @@ HALO_EXCHANGE::HALO_EXCHANGE(const RunParams& params)
 
   setDefaultReps(200);
 
-  m_num_vars = s_num_vars_default;
+  m_num_vars = params.getHaloNumVars();
   m_var_size = m_grid_plus_halo_size ;
 
   setItsPerRep( m_num_vars * (m_var_size - getActualProblemSize()) );
   setKernelsPerRep( 2 * s_num_neighbors * m_num_vars );
-  setBytesPerRep( (0*sizeof(Int_type)  + 1*sizeof(Int_type) ) * getItsPerRep() +  // pack
-                  (1*sizeof(Real_type) + 1*sizeof(Real_type)) * getItsPerRep() +  // pack
-                  (0*sizeof(Real_type) + 1*sizeof(Real_type)) * getItsPerRep() +  // send
-                  (1*sizeof(Real_type) + 0*sizeof(Real_type)) * getItsPerRep() +  // recv
-                  (0*sizeof(Int_type)  + 1*sizeof(Int_type) ) * getItsPerRep() +  // unpack
-                  (1*sizeof(Real_type) + 1*sizeof(Real_type)) * getItsPerRep() ); // unpack
+  setBytesReadPerRep( 1*sizeof(Int_type) * getItsPerRep() +   // pack
+                      1*sizeof(Real_type) * getItsPerRep() +  // pack
+
+                      1*sizeof(Real_type) * getItsPerRep() +  // send
+
+                      1*sizeof(Int_type) * getItsPerRep() +   // unpack
+                      1*sizeof(Real_type) * getItsPerRep() ); // unpack
+  setBytesWrittenPerRep( 1*sizeof(Real_type) * getItsPerRep() +  // pack
+
+                         1*sizeof(Real_type) * getItsPerRep() +  // recv
+
+                         1*sizeof(Real_type) * getItsPerRep() ); // unpack
+  setBytesAtomicModifyWrittenPerRep( 0 );
   setFLOPsPerRep(0);
+
+  setComplexity(Complexity::N_to_the_two_thirds);
 
   setUsesFeature(Forall);
   setUsesFeature(MPI);

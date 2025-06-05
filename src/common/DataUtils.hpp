@@ -1,5 +1,5 @@
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~//
-// Copyright (c) 2017-24, Lawrence Livermore National Security, LLC
+// Copyright (c) 2017-25, Lawrence Livermore National Security, LLC
 // and RAJA Performance Suite project contributors.
 // See the RAJAPerf/LICENSE file for details.
 //
@@ -26,6 +26,9 @@
 #endif
 #if defined(RAJA_ENABLE_HIP)
 #include "RAJA/policy/hip/MemUtils_HIP.hpp"
+#endif
+#if defined(RAJA_ENABLE_HIP)
+#include "RAJA/policy/sycl/MemUtils_SYCL.hpp"
 #endif
 
 namespace rajaperf
@@ -148,6 +151,9 @@ void initData(Real_type& d);
  * Checksumn is multiplied by given scale factor.
  */
 long double calcChecksum(Int_ptr d, Size_type len,
+                         Real_type scale_factor);
+///
+long double calcChecksum(unsigned long long* d, Size_type len,
                          Real_type scale_factor);
 ///
 long double calcChecksum(Real_ptr d, Size_type len,

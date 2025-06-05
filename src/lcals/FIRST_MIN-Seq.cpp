@@ -1,5 +1,5 @@
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~//
-// Copyright (c) 2017-24, Lawrence Livermore National Security, LLC
+// Copyright (c) 2017-25, Lawrence Livermore National Security, LLC
 // and RAJA Performance Suite project contributors.
 // See the RAJAPerf/LICENSE file for details.
 //
@@ -18,8 +18,11 @@ namespace lcals
 {
 
 
-void FIRST_MIN::runSeqVariant(VariantID vid, size_t RAJAPERF_UNUSED_ARG(tune_idx))
+void FIRST_MIN::runSeqVariant(VariantID vid, size_t tune_idx)
 {
+#if !defined(RUN_RAJA_SEQ)
+  RAJA_UNUSED_VAR(tune_idx);
+#endif
   const Index_type run_reps = getRunReps();
   const Index_type ibegin = 0;
   const Index_type iend = getActualProblemSize();
@@ -76,21 +79,53 @@ void FIRST_MIN::runSeqVariant(VariantID vid, size_t RAJAPERF_UNUSED_ARG(tune_idx
 
     case RAJA_Seq : {
 
-      startTimer();
-      for (RepIndex_type irep = 0; irep < run_reps; ++irep) {
+      auto res{getHostResource()};
 
-        RAJA::ReduceMinLoc<RAJA::seq_reduce, Real_type, Index_type> loc(
-                                                        m_xmin_init, m_initloc);
+      if (tune_idx == 0) {
 
-        RAJA::forall<RAJA::seq_exec>(
-          RAJA::RangeSegment(ibegin, iend), [=](Index_type i) {
-          FIRST_MIN_BODY_RAJA;
-        });
+        startTimer();
+        for (RepIndex_type irep = 0; irep < run_reps; ++irep) {
 
-        m_minloc = loc.getLoc();
+          RAJA::ReduceMinLoc<RAJA::seq_reduce,
+                             Real_type, Index_type> minloc(m_xmin_init,
+                                                           m_initloc);
 
+          RAJA::forall<RAJA::seq_exec>( res,
+            RAJA::RangeSegment(ibegin, iend), [=](Index_type i) {
+            FIRST_MIN_BODY_RAJA;
+          });
+  
+          m_minloc = minloc.getLoc();
+  
+        }
+        stopTimer();
+
+      } else if (tune_idx == 1) {
+
+        startTimer();
+        for (RepIndex_type irep = 0; irep < run_reps; ++irep) {
+
+          RAJA::expt::ValLoc<Real_type, Index_type> tminloc(m_xmin_init,
+                                                            m_initloc);
+
+          RAJA::forall<RAJA::seq_exec>( res,
+            RAJA::RangeSegment(ibegin, iend),
+            RAJA::expt::Reduce<RAJA::operators::minimum>(&tminloc),
+            [=](Index_type i,
+              RAJA::expt::ValLocOp<Real_type, Index_type,
+                                   RAJA::operators::minimum>& minloc) {
+              FIRST_MIN_BODY_RAJA;
+            }
+          );
+
+          m_minloc = static_cast<Index_type>(tminloc.getLoc());
+
+        }
+        stopTimer();
+
+      } else {
+        getCout() << "\n  FIRST_MIN : Unknown Seq tuning index = " << tune_idx << std::endl;
       }
-      stopTimer();
 
       break;
     }
@@ -102,6 +137,14 @@ void FIRST_MIN::runSeqVariant(VariantID vid, size_t RAJAPERF_UNUSED_ARG(tune_idx
 
   }
 
+}
+
+void FIRST_MIN::setSeqTuningDefinitions(VariantID vid)
+{
+  addVariantTuningName(vid, "default");
+  if (vid == RAJA_Seq) {
+    addVariantTuningName(vid, "new");
+  }
 }
 
 } // end namespace lcals

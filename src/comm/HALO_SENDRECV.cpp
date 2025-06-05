@@ -1,5 +1,5 @@
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~//
-// Copyright (c) 2017-24, Lawrence Livermore National Security, LLC
+// Copyright (c) 2017-25, Lawrence Livermore National Security, LLC
 // and RAJA Performance Suite project contributors.
 // See the RAJAPerf/LICENSE file for details.
 //
@@ -26,14 +26,17 @@ HALO_SENDRECV::HALO_SENDRECV(const RunParams& params)
 
   setDefaultReps(200);
 
-  m_num_vars = s_num_vars_default;
+  m_num_vars = params.getHaloNumVars();
   m_var_size = m_grid_plus_halo_size ;
 
   setItsPerRep( m_num_vars * (m_var_size - getActualProblemSize()) );
   setKernelsPerRep( 0 );
-  setBytesPerRep( (0*sizeof(Real_type) + 1*sizeof(Real_type)) * getItsPerRep() +  // send
-                  (1*sizeof(Real_type) + 0*sizeof(Real_type)) * getItsPerRep() ); // recv
+  setBytesReadPerRep( 1*sizeof(Real_type) * getItsPerRep() ); // send
+  setBytesWrittenPerRep( 1*sizeof(Real_type) * getItsPerRep() ); // recv
+  setBytesAtomicModifyWrittenPerRep( 0 );
   setFLOPsPerRep(0);
+
+  setComplexity(Complexity::N_to_the_two_thirds);
 
   setUsesFeature(Forall);
   setUsesFeature(MPI);

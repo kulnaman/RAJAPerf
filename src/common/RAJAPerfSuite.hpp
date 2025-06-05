@@ -1,5 +1,5 @@
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~//
-// Copyright (c) 2017-24, Lawrence Livermore National Security, LLC
+// Copyright (c) 2017-25, Lawrence Livermore National Security, LLC
 // and RAJA Performance Suite project contributors.
 // See the RAJAPerf/LICENSE file for details.
 //
@@ -7,7 +7,7 @@
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~//
 
 ///
-/// Types and methods for managing Suite kernels, variants, features, etc..
+/// Types and methods for managing Suite kernels, variants, features, complexities, etc..
 ///
 
 #ifndef RAJAPerfSuite_HPP
@@ -81,6 +81,7 @@ enum KernelID {
   Basic_COPY8,
   Basic_DAXPY,
   Basic_DAXPY_ATOMIC,
+  Basic_EMPTY,
   Basic_IF_QUAD,
   Basic_INDEXLIST,
   Basic_INDEXLIST_3LOOP,
@@ -95,6 +96,7 @@ enum KernelID {
   Basic_REDUCE3_INT,
   Basic_REDUCE_STRUCT,
   Basic_TRAP_INT,
+  Basic_MULTI_REDUCE,
 
 //
 // Lcals kernels...
@@ -145,11 +147,13 @@ enum KernelID {
   Apps_DIFFUSION3DPA,
   Apps_EDGE3D,
   Apps_ENERGY,
+  Apps_FEMSWEEP,
   Apps_FIR,
   Apps_LTIMES,
   Apps_LTIMES_NOVIEW,
   Apps_MASS3DEA,
   Apps_MASS3DPA,
+  Apps_MATVEC_3D_STENCIL,
   Apps_NODAL_ACCUMULATION_3D,
   Apps_PRESSURE,
   Apps_VOL3D,
@@ -164,6 +168,8 @@ enum KernelID {
   Algorithm_REDUCE_SUM,
   Algorithm_MEMSET,
   Algorithm_MEMCPY,
+  Algorithm_ATOMIC,
+  Algorithm_HISTOGRAM,
 
 //
 // Comm kernels...
@@ -216,6 +222,9 @@ enum VariantID {
 
   Kokkos_Lambda,
 
+  Base_SYCL,
+  RAJA_SYCL,
+
   NumVariants // Keep this one last and NEVER comment out (!!)
 
 };
@@ -260,6 +269,33 @@ enum FeatureID {
 /*!
  *******************************************************************************
  *
+ * \brief Enumeration defining unique id for each algorithmic COMPLEXITY used in suite.
+ *
+ * IMPORTANT: This is only modified when a new complexity is used in suite.
+ *
+ *            IT MUST BE KEPT CONSISTENT (CORRESPONDING ONE-TO-ONE) WITH
+ *            ITEMS IN THE ComplexityNames ARRAY IN IMPLEMENTATION FILE!!!
+ *
+ *******************************************************************************
+ */
+enum struct Complexity {
+
+  N = 0,
+
+  N_logN,
+
+  N_to_the_three_halves,
+
+  N_to_the_two_thirds,
+
+  NumComplexities // Keep this one last and NEVER comment out (!!)
+
+};
+
+
+/*!
+ *******************************************************************************
+ *
  * \brief Enumeration defining unique id for each Data memory space
  * used in suite.
  *
@@ -296,6 +332,10 @@ enum struct DataSpace {
   HipManagedAdviseCoarse,
   HipDevice,
   HipDeviceFine,
+
+  SyclPinned,
+  SyclManaged,
+  SyclDevice,
 
   NumSpaces, // Keep this one here and NEVER comment out (!!)
 
@@ -374,6 +414,15 @@ bool isVariantGPU(VariantID vid);
  *******************************************************************************
  */
 const std::string& getFeatureName(FeatureID vid);
+
+/*!
+ *******************************************************************************
+ *
+ * \brief Return algorithmic complexity name associated with Complexity enum value.
+ *
+ *******************************************************************************
+ */
+const std::string& getComplexityName(Complexity ac);
 
 /*!
  *******************************************************************************

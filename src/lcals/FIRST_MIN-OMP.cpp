@@ -1,5 +1,5 @@
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~//
-// Copyright (c) 2017-24, Lawrence Livermore National Security, LLC
+// Copyright (c) 2017-25, Lawrence Livermore National Security, LLC
 // and RAJA Performance Suite project contributors.
 // See the RAJAPerf/LICENSE file for details.
 //
@@ -18,7 +18,7 @@ namespace lcals
 {
 
 
-void FIRST_MIN::runOpenMPVariant(VariantID vid, size_t RAJAPERF_UNUSED_ARG(tune_idx))
+void FIRST_MIN::runOpenMPVariant(VariantID vid, size_t tune_idx)
 {
 #if defined(RAJA_ENABLE_OPENMP) && defined(RUN_OPENMP)
 
@@ -87,21 +87,53 @@ void FIRST_MIN::runOpenMPVariant(VariantID vid, size_t RAJAPERF_UNUSED_ARG(tune_
 
     case RAJA_OpenMP : {
 
-      startTimer();
-      for (RepIndex_type irep = 0; irep < run_reps; ++irep) {
+      auto res{getHostResource()};
 
-        RAJA::ReduceMinLoc<RAJA::omp_reduce, Real_type, Index_type> loc(
-                                                        m_xmin_init, m_initloc);
+      if (tune_idx == 0) {
 
-        RAJA::forall<RAJA::omp_parallel_for_exec>(
-          RAJA::RangeSegment(ibegin, iend), [=](Index_type i) {
-          FIRST_MIN_BODY_RAJA;
-        });
+        startTimer();
+        for (RepIndex_type irep = 0; irep < run_reps; ++irep) {
+  
+          RAJA::ReduceMinLoc<RAJA::omp_reduce,
+                             Real_type, Index_type> minloc(m_xmin_init,
+                                                           m_initloc);
 
-        m_minloc = loc.getLoc();
+          RAJA::forall<RAJA::omp_parallel_for_exec>( res,
+            RAJA::RangeSegment(ibegin, iend), [=](Index_type i) {
+            FIRST_MIN_BODY_RAJA;
+          });
 
+          m_minloc = minloc.getLoc();
+
+        }
+        stopTimer();
+
+      } else if (tune_idx == 1) {
+
+        startTimer();
+        for (RepIndex_type irep = 0; irep < run_reps; ++irep) {
+
+          RAJA::expt::ValLoc<Real_type, Index_type> tminloc(m_xmin_init,
+                                                            m_initloc);
+
+          RAJA::forall<RAJA::omp_parallel_for_exec>( res,
+            RAJA::RangeSegment(ibegin, iend),
+            RAJA::expt::Reduce<RAJA::operators::minimum>(&tminloc),
+            [=](Index_type i,
+              RAJA::expt::ValLocOp<Real_type, Index_type,
+                                   RAJA::operators::minimum>& minloc) {
+              FIRST_MIN_BODY_RAJA;
+            }
+          );
+
+          m_minloc = static_cast<Index_type>(tminloc.getLoc());
+
+        }
+        stopTimer();
+
+      } else {
+        getCout() << "\n  FIRST_MIN : Unknown OpenMP tuning index = " << tune_idx << std::endl;
       }
-      stopTimer();
 
       break;
     }
@@ -114,7 +146,16 @@ void FIRST_MIN::runOpenMPVariant(VariantID vid, size_t RAJAPERF_UNUSED_ARG(tune_
 
 #else
   RAJA_UNUSED_VAR(vid);
+  RAJA_UNUSED_VAR(tune_idx);
 #endif
+}
+
+void FIRST_MIN::setOpenMPTuningDefinitions(VariantID vid)
+{
+  addVariantTuningName(vid, "default");
+  if (vid == RAJA_OpenMP) {
+    addVariantTuningName(vid, "new");
+  }
 }
 
 } // end namespace lcals

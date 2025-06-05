@@ -1,5 +1,5 @@
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~//
-// Copyright (c) 2017-24, Lawrence Livermore National Security, LLC
+// Copyright (c) 2017-25, Lawrence Livermore National Security, LLC
 // and RAJA Performance Suite project contributors.
 // See the RAJAPerf/LICENSE file for details.
 //
@@ -79,13 +79,13 @@ void FIRST_MIN::runCudaVariantBase(VariantID vid)
     const size_t normal_grid_size = RAJA_DIVIDE_CEILING_INT(iend, block_size);
     const size_t grid_size = std::min(normal_grid_size, max_grid_size);
 
-    RAJAPERF_CUDA_REDUCER_SETUP(MyMinLoc*, dminloc, mymin_block, grid_size);
+    RAJAPERF_CUDA_REDUCER_SETUP(MyMinLoc*, dminloc, mymin_block, grid_size, 1);
 
     startTimer();
     for (RepIndex_type irep = 0; irep < run_reps; ++irep) {
 
       FIRST_MIN_MINLOC_INIT;
-      RAJAPERF_CUDA_REDUCER_INITIALIZE_VALUE(mymin, dminloc, mymin_block, grid_size);
+      RAJAPERF_CUDA_REDUCER_INITIALIZE_VALUE(mymin, dminloc, mymin_block, grid_size, 1);
 
       RPlaunchCudaKernel( (first_min<block_size>),
                            grid_size, block_size,
@@ -93,7 +93,7 @@ void FIRST_MIN::runCudaVariantBase(VariantID vid)
                            x, dminloc, mymin, 
                            iend );
 
-      RAJAPERF_CUDA_REDUCER_COPY_BACK_NOFINAL(dminloc, mymin_block, grid_size);
+      RAJAPERF_CUDA_REDUCER_COPY_BACK(dminloc, mymin_block, grid_size, 1);
       for (Index_type i = 0; i < static_cast<Index_type>(grid_size); i++) {
         if ( mymin_block[i].val < mymin.val ) {
           mymin = mymin_block[i];
@@ -114,8 +114,6 @@ void FIRST_MIN::runCudaVariantBase(VariantID vid)
 template < size_t block_size, typename MappingHelper >
 void FIRST_MIN::runCudaVariantRAJA(VariantID vid)
 {
-  using reduction_policy = RAJA::cuda_reduce;
-
   using exec_policy = std::conditional_t<MappingHelper::direct,
       RAJA::cuda_exec<block_size, true /*async*/>,
       RAJA::cuda_exec_occ_calc<block_size, true /*async*/>>;
@@ -133,15 +131,59 @@ void FIRST_MIN::runCudaVariantRAJA(VariantID vid)
     startTimer();
     for (RepIndex_type irep = 0; irep < run_reps; ++irep) {
 
-       RAJA::ReduceMinLoc<reduction_policy, Real_type, Index_type> loc(
-                                                        m_xmin_init, m_initloc);
+       RAJA::ReduceMinLoc<RAJA::cuda_reduce,
+                          Real_type, Index_type> minloc(m_xmin_init,
+                          m_initloc);
 
        RAJA::forall<exec_policy>( res,
          RAJA::RangeSegment(ibegin, iend), [=] __device__ (Index_type i) {
          FIRST_MIN_BODY_RAJA;
        });
 
-       m_minloc = loc.getLoc();
+       m_minloc = minloc.getLoc();
+
+    }
+    stopTimer();
+
+  } else {
+     getCout() << "\n  FIRST_MIN : Unknown Cuda variant id = " << vid << std::endl;
+  }
+}
+
+template < size_t block_size, typename MappingHelper >
+void FIRST_MIN::runCudaVariantRAJANewReduce(VariantID vid)
+{
+  using exec_policy = std::conditional_t<MappingHelper::direct,
+      RAJA::cuda_exec<block_size, true /*async*/>,
+      RAJA::cuda_exec_occ_calc<block_size, true /*async*/>>;
+
+  const Index_type run_reps = getRunReps();
+  const Index_type ibegin = 0;
+  const Index_type iend = getActualProblemSize();
+
+  auto res{getCudaResource()};
+
+  FIRST_MIN_DATA_SETUP;
+
+  if ( vid == RAJA_CUDA ) {
+
+    startTimer();
+    for (RepIndex_type irep = 0; irep < run_reps; ++irep) {
+
+      RAJA::expt::ValLoc<Real_type, Index_type> tminloc(m_xmin_init,
+                                                        m_initloc);
+
+       RAJA::forall<exec_policy>( res,
+         RAJA::RangeSegment(ibegin, iend),
+         RAJA::expt::Reduce<RAJA::operators::minimum>(&tminloc),
+         [=] __device__ (Index_type i,
+           RAJA::expt::ValLocOp<Real_type, Index_type,
+                                RAJA::operators::minimum>& minloc) {
+           FIRST_MIN_BODY_RAJA;
+         }
+       );
+
+       m_minloc = static_cast<Index_type>(tminloc.getLoc());
 
     }
     stopTimer();
@@ -188,6 +230,16 @@ void FIRST_MIN::runCudaVariant(VariantID vid, size_t tune_idx)
 
             t += 1;
 
+            if (tune_idx == t) {
+
+              setBlockSize(block_size);
+              runCudaVariantRAJANewReduce<decltype(block_size){},
+                                          decltype(mapping_helper)>(vid);
+
+            }
+
+            t += 1;
+
           }
 
         });
@@ -222,6 +274,7 @@ void FIRST_MIN::setCudaTuningDefinitions(VariantID vid)
             addVariantTuningName(vid, decltype(algorithm_helper)::get_name()+"_"+
                                       decltype(mapping_helper)::get_name()+"_"+
                                       std::to_string(block_size));
+            RAJA_UNUSED_VAR(algorithm_helper); // to quiet compiler warning
 
           } else if ( vid == RAJA_CUDA ) {
 
@@ -230,6 +283,11 @@ void FIRST_MIN::setCudaTuningDefinitions(VariantID vid)
             addVariantTuningName(vid, decltype(algorithm_helper)::get_name()+"_"+
                                       decltype(mapping_helper)::get_name()+"_"+
                                       std::to_string(block_size));
+
+            addVariantTuningName(vid, decltype(algorithm_helper)::get_name()+"_"+
+                                      decltype(mapping_helper)::get_name()+"_"+
+                                      "new_"+std::to_string(block_size));
+            RAJA_UNUSED_VAR(algorithm_helper); // to quiet compiler warning
 
           }
 

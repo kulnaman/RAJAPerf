@@ -1,5 +1,5 @@
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~//
-// Copyright (c) 2017-24, Lawrence Livermore National Security, LLC
+// Copyright (c) 2017-25, Lawrence Livermore National Security, LLC
 // and RAJA Performance Suite project contributors.
 // See the RAJAPerf/LICENSE file for details.
 //
@@ -28,9 +28,12 @@ PI_REDUCE::PI_REDUCE(const RunParams& params)
 
   setItsPerRep( getActualProblemSize() );
   setKernelsPerRep(1);
-  setBytesPerRep( (1*sizeof(Real_type) + 1*sizeof(Real_type)) +
-                  (0*sizeof(Real_type) + 0*sizeof(Real_type)) * getActualProblemSize() );
+  setBytesReadPerRep( 1*sizeof(Real_type) );
+  setBytesWrittenPerRep( 1*sizeof(Real_type) );
+  setBytesAtomicModifyWrittenPerRep( 0 );
   setFLOPsPerRep(6 * getActualProblemSize() + 1);
+
+  setComplexity(Complexity::N);
 
   setUsesFeature(Forall);
   setUsesFeature(Reduction);
@@ -51,6 +54,9 @@ PI_REDUCE::PI_REDUCE(const RunParams& params)
 
   setVariantDefined( Base_HIP );
   setVariantDefined( RAJA_HIP );
+
+  setVariantDefined( Base_SYCL );
+  setVariantDefined( RAJA_SYCL );
 }
 
 PI_REDUCE::~PI_REDUCE()

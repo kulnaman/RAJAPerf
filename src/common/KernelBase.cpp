@@ -1,5 +1,5 @@
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~//
-// Copyright (c) 2017-24, Lawrence Livermore National Security, LLC
+// Copyright (c) 2017-25, Lawrence Livermore National Security, LLC
 // and RAJA Performance Suite project contributors.
 // See the RAJAPerf/LICENSE file for details.
 //
@@ -11,6 +11,7 @@
 #include "RunParams.hpp"
 #include "OpenMPTargetDataUtils.hpp"
 
+#include "RAJA/RAJA.hpp"
 #include <cmath>
 #include <limits>
 #include <stdexcept>
@@ -35,9 +36,13 @@ KernelBase::KernelBase(KernelID kid, const RunParams& params)
     uses_feature[fid] = false;
   }
 
+  complexity = Complexity::NumComplexities;
+
   its_per_rep = -1;
   kernels_per_rep = -1;
-  bytes_per_rep = -1;
+  bytes_read_per_rep = -1;
+  bytes_written_per_rep = -1;
+  bytes_atomic_modify_written_per_rep = -1;
   FLOPs_per_rep = -1;
 
   running_variant = NumVariants;
@@ -68,6 +73,18 @@ KernelBase::KernelBase(KernelID kid, const RunParams& params)
                                          CALI_ATTR_ASVALUE |
                                          CALI_ATTR_AGGREGATABLE |
                                          CALI_ATTR_SKIP_EVENTS);
+  Bytes_Read_Rep_attr = cali_create_attribute("BytesRead/Rep", CALI_TYPE_DOUBLE,
+                                              CALI_ATTR_ASVALUE |
+                                              CALI_ATTR_AGGREGATABLE |
+                                              CALI_ATTR_SKIP_EVENTS);
+  Bytes_Written_Rep_attr = cali_create_attribute("BytesWritten/Rep", CALI_TYPE_DOUBLE,
+                                                 CALI_ATTR_ASVALUE |
+                                                 CALI_ATTR_AGGREGATABLE |
+                                                 CALI_ATTR_SKIP_EVENTS);
+  Bytes_AtomicModifyWritten_Rep_attr = cali_create_attribute("BytesAtomicModifyWritten/Rep", CALI_TYPE_DOUBLE,
+                                                             CALI_ATTR_ASVALUE |
+                                                             CALI_ATTR_AGGREGATABLE |
+                                                             CALI_ATTR_SKIP_EVENTS);
   Flops_Rep_attr = cali_create_attribute("Flops/Rep", CALI_TYPE_DOUBLE,
                                          CALI_ATTR_ASVALUE |
                                          CALI_ATTR_AGGREGATABLE |
@@ -75,6 +92,16 @@ KernelBase::KernelBase(KernelID kid, const RunParams& params)
   BlockSize_attr = cali_create_attribute("BlockSize", CALI_TYPE_DOUBLE,
                                            CALI_ATTR_ASVALUE |
                                            CALI_ATTR_AGGREGATABLE |
+                                           CALI_ATTR_SKIP_EVENTS);
+  for (unsigned i = 0; i < FeatureID::NumFeatures; ++i) {
+    FeatureID fid = static_cast<FeatureID>(i);
+    std::string feature = getFeatureName(fid);
+    Feature_attrs[feature] = cali_create_attribute(feature.c_str(), CALI_TYPE_INT,
+                                              CALI_ATTR_ASVALUE |
+                                              CALI_ATTR_AGGREGATABLE |
+                                              CALI_ATTR_SKIP_EVENTS);
+  }
+  Complexity_attr = cali_create_attribute("Complexity", CALI_TYPE_STRING,
                                            CALI_ATTR_SKIP_EVENTS);
 #endif
 }
@@ -167,13 +194,23 @@ void KernelBase::setVariantDefined(VariantID vid)
 #endif
       break;
     }
+
+    case Base_SYCL:
+    case RAJA_SYCL:
+    {
+#if defined(RAJA_ENABLE_SYCL)
+      setSyclTuningDefinitions(vid);
+#endif
+      break;
+    }
+
 // Required for running Kokkos
     case Kokkos_Lambda :
     {
 #if defined(RUN_KOKKOS)
-    setKokkosTuningDefinitions(vid);
+      setKokkosTuningDefinitions(vid);
 #endif
-    break;
+      break;
     }
 
     default : {
@@ -227,6 +264,10 @@ DataSpace KernelBase::getDataSpace(VariantID vid) const
     case RAJA_HIP :
       return run_params.getHipDataSpace();
 
+    case Base_SYCL :
+    case RAJA_SYCL :
+      return run_params.getSyclDataSpace();
+
     case Kokkos_Lambda :
       return run_params.getKokkosDataSpace();
 
@@ -263,6 +304,10 @@ DataSpace KernelBase::getMPIDataSpace(VariantID vid) const
     case RAJA_HIP :
       return run_params.getHipMPIDataSpace();
 
+    case Base_SYCL :
+    case RAJA_SYCL :
+      return run_params.getSyclMPIDataSpace();
+
     case Kokkos_Lambda :
       return run_params.getKokkosMPIDataSpace();
 
@@ -298,6 +343,10 @@ DataSpace KernelBase::getReductionDataSpace(VariantID vid) const
     case Lambda_HIP :
     case RAJA_HIP :
       return run_params.getHipReductionDataSpace();
+
+    case Base_SYCL :
+    case RAJA_SYCL :
+      return run_params.getSyclReductionDataSpace();
 
     case Kokkos_Lambda :
       return run_params.getKokkosReductionDataSpace();
@@ -406,11 +455,22 @@ void KernelBase::runKernel(VariantID vid, size_t tune_idx)
 #endif
       break;
     }
+
+    case Base_SYCL:
+    case RAJA_SYCL:
+    {
+#if defined(RAJA_ENABLE_SYCL)
+      runSyclVariant(vid, tune_idx);
+#endif
+      break;
+    }
+
     case Kokkos_Lambda :
     {
 #if defined(RUN_KOKKOS)
       runKokkosVariant(vid, tune_idx);
 #endif
+      break;
     }
 
     default : {
@@ -440,6 +500,7 @@ void KernelBase::print(std::ostream& os) const
     os << "\t\t\t\t" << getFeatureName(static_cast<FeatureID>(j))
                      << " : " << uses_feature[j] << std::endl;
   }
+  os << "\t\t\t algorithmic_complexity = " << getComplexityName(complexity) << std::endl;
   os << "\t\t\t variant_tuning_names: " << std::endl;
   for (unsigned j = 0; j < NumVariants; ++j) {
     os << "\t\t\t\t" << getVariantName(static_cast<VariantID>(j))
@@ -451,7 +512,9 @@ void KernelBase::print(std::ostream& os) const
   }
   os << "\t\t\t its_per_rep = " << its_per_rep << std::endl;
   os << "\t\t\t kernels_per_rep = " << kernels_per_rep << std::endl;
-  os << "\t\t\t bytes_per_rep = " << bytes_per_rep << std::endl;
+  os << "\t\t\t bytes_read_per_rep = " << bytes_read_per_rep << std::endl;
+  os << "\t\t\t bytes_written_per_rep = " << bytes_written_per_rep << std::endl;
+  os << "\t\t\t bytes_atomic_modify_written_per_rep = " << bytes_atomic_modify_written_per_rep << std::endl;
   os << "\t\t\t FLOPs_per_rep = " << FLOPs_per_rep << std::endl;
   os << "\t\t\t num_exec: " << std::endl;
   for (unsigned j = 0; j < NumVariants; ++j) {
@@ -506,8 +569,17 @@ void KernelBase::doOnceCaliMetaBegin(VariantID vid, size_t tune_idx)
     cali_set_double(Iters_Rep_attr,(double)getItsPerRep());
     cali_set_double(Kernels_Rep_attr,(double)getKernelsPerRep());
     cali_set_double(Bytes_Rep_attr,(double)getBytesPerRep());
+    cali_set_double(Bytes_Read_Rep_attr,(double)getBytesReadPerRep());
+    cali_set_double(Bytes_Written_Rep_attr,(double)getBytesWrittenPerRep());
+    cali_set_double(Bytes_AtomicModifyWritten_Rep_attr,(double)getBytesAtomicModifyWrittenPerRep());
     cali_set_double(Flops_Rep_attr,(double)getFLOPsPerRep());
     cali_set_double(BlockSize_attr, getBlockSize());
+    for (unsigned i = 0; i < FeatureID::NumFeatures; ++i) {
+        FeatureID fid = static_cast<FeatureID>(i);
+        std::string feature = getFeatureName(fid);
+        cali_set_int(Feature_attrs[feature], usesFeature(fid));
+    }
+    cali_set_string(Complexity_attr, getComplexityName(getComplexity()).c_str());
   }
 }
 
@@ -521,7 +593,8 @@ void KernelBase::doOnceCaliMetaEnd(VariantID vid, size_t tune_idx)
 void KernelBase::setCaliperMgrVariantTuning(VariantID vid,
                                   std::string tstr,
                                   const std::string& outdir,
-                                  const std::string& addToConfig)
+                                  const std::string& addToSpotConfig,
+                                  const std::string& addToCaliConfig)
 {
   static bool ran_spot_config_check = false;
   bool config_ok = true;
@@ -543,9 +616,23 @@ void KernelBase::setCaliperMgrVariantTuning(VariantID vid,
           { "expr": "any(max#Iterations/Rep)", "as": "Iterations/Rep" },
           { "expr": "any(max#Kernels/Rep)", "as": "Kernels/Rep" },
           { "expr": "any(max#Bytes/Rep)", "as": "Bytes/Rep" },
+          { "expr": "any(max#BytesRead/Rep)", "as": "BytesRead/Rep" },
+          { "expr": "any(max#BytesWritten/Rep)", "as": "BytesWritten/Rep" },
+          { "expr": "any(max#BytesAtomicModifyWritten/Rep)", "as": "BytesAtomicModifyWritten/Rep" },
           { "expr": "any(max#Flops/Rep)", "as": "Flops/Rep" },
-          { "expr": "any(max#BlockSize)", "as": "BlockSize" }
-        ]
+          { "expr": "any(max#BlockSize)", "as": "BlockSize" },
+          { "expr": "any(max#Forall)", "as": "FeatureForall" },
+          { "expr": "any(max#Kernel)", "as": "FeatureKernel" },
+          { "expr": "any(max#Launch)", "as": "FeatureLaunch" },
+          { "expr": "any(max#Sort)", "as": "FeatureSort" },
+          { "expr": "any(max#Scan)", "as": "FeatureScan" },
+          { "expr": "any(max#Workgroup)", "as": "FeatureWorkgroup" },
+          { "expr": "any(max#Reduction)", "as": "FeatureReduction" },
+          { "expr": "any(max#Atomic)", "as": "FeatureAtomic" },
+          { "expr": "any(max#View)", "as": "FeatureView" },
+          { "expr": "any(max#MPI)", "as": "FeatureMPI" },
+        ],
+        "group by": ["Complexity"],
       },
       {
         "level"  : "cross",
@@ -556,21 +643,48 @@ void KernelBase::setCaliperMgrVariantTuning(VariantID vid,
           { "expr": "any(any#max#Iterations/Rep)", "as": "Iterations/Rep" },
           { "expr": "any(any#max#Kernels/Rep)", "as": "Kernels/Rep" },
           { "expr": "any(any#max#Bytes/Rep)", "as": "Bytes/Rep" },
+          { "expr": "any(any#max#BytesRead/Rep)", "as": "BytesRead/Rep" },
+          { "expr": "any(any#max#BytesWritten/Rep)", "as": "BytesWritten/Rep" },
+          { "expr": "any(any#max#BytesAtomicModifyWritten/Rep)", "as": "BytesAtomicModifyWritten/Rep" },
           { "expr": "any(any#max#Flops/Rep)", "as": "Flops/Rep" },
-          { "expr": "any(any#max#BlockSize)", "as": "BlockSize" }
-        ]
+          { "expr": "any(any#max#BlockSize)", "as": "BlockSize" },
+          { "expr": "any(any#max#Forall)", "as": "FeatureForall" },
+          { "expr": "any(any#max#Kernel)", "as": "FeatureKernel" },
+          { "expr": "any(any#max#Launch)", "as": "FeatureLaunch" },
+          { "expr": "any(any#max#Sort)", "as": "FeatureSort" },
+          { "expr": "any(any#max#Scan)", "as": "FeatureScan" },
+          { "expr": "any(any#max#Workgroup)", "as": "FeatureWorkgroup" },
+          { "expr": "any(any#max#Reduction)", "as": "FeatureReduction" },
+          { "expr": "any(any#max#Atomic)", "as": "FeatureAtomic" },
+          { "expr": "any(any#max#View)", "as": "FeatureView" },
+          { "expr": "any(any#max#MPI)", "as": "FeatureMPI" },
+        ],
+        "group by": ["Complexity"],
       }
     ]
   }
   )json";
 
-  if(!ran_spot_config_check && (!addToConfig.empty())) {
+  // Skip check if both empty
+  if ((!addToSpotConfig.empty() || !addToCaliConfig.empty()) && !ran_spot_config_check) {
     cali::ConfigManager cm;
-    std::string check_profile = "spot()," + addToConfig;
+    std::string check_profile;
+    // If both not empty
+    if (!addToSpotConfig.empty() && !addToCaliConfig.empty()) {
+      check_profile = "spot(" + addToSpotConfig + ")," + addToCaliConfig;
+    }
+    else if (!addToSpotConfig.empty()) {
+      check_profile = "spot(" + addToSpotConfig + ")";
+    }
+    // if !addToCaliConfig.empty()
+    else {
+      check_profile = addToCaliConfig;
+    }
+
     std::string msg = cm.check(check_profile.c_str());
     if(!msg.empty()) {
       std::cerr << "Problem with Cali Config: " << check_profile << "\n";
-      std::cerr << "Check your command line argument: " << addToConfig << "\n";
+      std::cerr << msg << "\n";
       config_ok = false;
       exit(-1);
     }
@@ -586,9 +700,13 @@ void KernelBase::setCaliperMgrVariantTuning(VariantID vid,
       od = outdir + "/";
     }
     std::string vstr = getVariantName(vid);
-    std::string profile = "spot(output=" + od + vstr + "-" + tstr + ".cali)";
-    if(!addToConfig.empty()) {
-      profile += "," + addToConfig;
+    std::string profile = "spot(output=" + od + vstr + "-" + tstr + ".cali";
+    if(!addToSpotConfig.empty()) {
+      profile += "," + addToSpotConfig;
+    }
+    profile += ")";
+    if (!addToCaliConfig.empty()) {
+      profile += "," + addToCaliConfig;
     }
     std::cout << "Profile: " << profile << std::endl;
     mgr[vid][tstr].add_option_spec(kernel_info_spec);

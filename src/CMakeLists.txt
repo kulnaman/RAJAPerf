@@ -1,5 +1,5 @@
 ###############################################################################
-# Copyright (c) 2017-24, Lawrence Livermore National Security, LLC
+# Copyright (c) 2017-25, Lawrence Livermore National Security, LLC
 # and RAJA Performance Suite project contributors.
 # See the RAJAPerf/LICENSE file for details.
 #
@@ -20,7 +20,7 @@ add_subdirectory(stream-kokkos)
 add_subdirectory(algorithm)
 add_subdirectory(comm)
 
-set(RAJA_PERFSUITE_EXECUTABLE_DEPENDS
+set(RAJA_PERFSUITE_LIBS
     common
     apps
     basic
@@ -32,6 +32,7 @@ set(RAJA_PERFSUITE_EXECUTABLE_DEPENDS
     stream-kokkos
     algorithm
     comm)
+set(RAJA_PERFSUITE_EXECUTABLE_DEPENDS ${RAJA_PERFSUITE_LIBS})
 list(APPEND RAJA_PERFSUITE_EXECUTABLE_DEPENDS ${RAJA_PERFSUITE_DEPENDS})
 
 if(RAJA_ENABLE_TARGET_OPENMP)
@@ -53,6 +54,9 @@ blt_add_executable(
   apps/ENERGY.cpp
   apps/ENERGY-Seq.cpp
   apps/ENERGY-OMPTarget.cpp
+  apps/FEMSWEEP.cpp
+  apps/FEMSWEEP-Seq.cpp
+  apps/FEMSWEEP-OMPTarget.cpp
   apps/FIR.cpp
   apps/FIR-Seq.cpp
   apps/FIR-OMPTarget.cpp
@@ -71,6 +75,9 @@ blt_add_executable(
   apps/MASS3DPA.cpp
   apps/MASS3DPA-Seq.cpp
   apps/MASS3DPA-OMPTarget.cpp
+  apps/MATVEC_3D_STENCIL.cpp
+  apps/MATVEC_3D_STENCIL-Seq.cpp
+  apps/MATVEC_3D_STENCIL-OMPTarget.cpp
   apps/NODAL_ACCUMULATION_3D.cpp
   apps/NODAL_ACCUMULATION_3D-Seq.cpp
   apps/NODAL_ACCUMULATION_3D-OMPTarget.cpp
@@ -92,6 +99,9 @@ blt_add_executable(
   basic/DAXPY_ATOMIC.cpp
   basic/DAXPY_ATOMIC-Seq.cpp
   basic/DAXPY_ATOMIC-OMPTarget.cpp
+  basic/EMPTY.cpp
+  basic/EMPTY-Seq.cpp
+  basic/EMPTY-OMPTarget.cpp
   basic/IF_QUAD.cpp
   basic/IF_QUAD-Seq.cpp
   basic/IF_QUAD-OMPTarget.cpp
@@ -134,6 +144,9 @@ blt_add_executable(
   basic/TRAP_INT.cpp
   basic/TRAP_INT-Seq.cpp
   basic/TRAP_INT-OMPTarget.cpp
+  basic/MULTI_REDUCE.cpp
+  basic/MULTI_REDUCE-Seq.cpp
+  basic/MULTI_REDUCE-OMPTarget.cpp
   lcals/DIFF_PREDICT.cpp
   lcals/DIFF_PREDICT-Seq.cpp
   lcals/DIFF_PREDICT-OMPTarget.cpp
@@ -244,6 +257,12 @@ blt_add_executable(
   algorithm/MEMCPY.cpp
   algorithm/MEMCPY-Seq.cpp
   algorithm/MEMCPY-OMPTarget.cpp
+  algorithm/ATOMIC.cpp
+  algorithm/ATOMIC-Seq.cpp
+  algorithm/ATOMIC-OMPTarget.cpp
+  algorithm/HISTOGRAM.cpp
+  algorithm/HISTOGRAM-Seq.cpp
+  algorithm/HISTOGRAM-OMPTarget.cpp
   comm/HALO_base.cpp
   comm/HALO_PACKING.cpp
   comm/HALO_PACKING-Seq.cpp
@@ -275,5 +294,8 @@ blt_add_executable(
   )
 install( TARGETS raja-perf.exe
          RUNTIME DESTINATION bin
+       )
+install( TARGETS ${RAJA_PERFSUITE_LIBS}
+         LIBRARY DESTINATION lib
        )
 endif()

@@ -1,5 +1,5 @@
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~//
-// Copyright (c) 2017-24, Lawrence Livermore National Security, LLC
+// Copyright (c) 2017-25, Lawrence Livermore National Security, LLC
 // and RAJA Performance Suite project contributors.
 // See the RAJAPerf/LICENSE file for details.
 //
@@ -28,9 +28,12 @@ PI_ATOMIC::PI_ATOMIC(const RunParams& params)
 
   setItsPerRep( getActualProblemSize() );
   setKernelsPerRep(1);
-  setBytesPerRep( (1*sizeof(Real_type) + 1*sizeof(Real_type)) +
-                  (0*sizeof(Real_type) + 0*sizeof(Real_type)) * getActualProblemSize() );
+  setBytesReadPerRep( 0 );
+  setBytesWrittenPerRep( 0  );
+  setBytesAtomicModifyWrittenPerRep( 1*sizeof(Real_type) );
   setFLOPsPerRep(6 * getActualProblemSize() + 1);
+
+  setComplexity(Complexity::N);
 
   setUsesFeature(Forall);
   setUsesFeature(Atomic);

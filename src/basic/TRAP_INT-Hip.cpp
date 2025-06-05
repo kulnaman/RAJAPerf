@@ -1,5 +1,5 @@
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~//
-// Copyright (c) 2017-24, Lawrence Livermore National Security, LLC
+// Copyright (c) 2017-25, Lawrence Livermore National Security, LLC
 // and RAJA Performance Suite project contributors.
 // See the RAJAPerf/LICENSE file for details.
 //
@@ -11,6 +11,8 @@
 #include "RAJA/RAJA.hpp"
 
 #if defined(RAJA_ENABLE_HIP)
+
+#include "TRAP_INT-func.hpp"
 
 #include "common/HipDataUtils.hpp"
 
@@ -24,21 +26,6 @@ namespace rajaperf
 {
 namespace basic
 {
-
-//
-// Function used in TRAP_INT loop.
-//
-RAJA_INLINE
-RAJA_DEVICE
-Real_type trap_int_func(Real_type x,
-                        Real_type y,
-                        Real_type xp,
-                        Real_type yp)
-{
-   Real_type denom = (x - xp)*(x - xp) + (y - yp)*(y - yp);
-   denom = 1.0/sqrt(denom);
-   return denom;
-}
 
 
 template < size_t block_size >
@@ -86,7 +73,7 @@ void TRAP_INT::runHipVariantBase(VariantID vid)
 
   if ( vid == Base_HIP ) {
 
-    RAJAPERF_HIP_REDUCER_SETUP(Real_ptr, sumx, hsumx, 1);
+    RAJAPERF_HIP_REDUCER_SETUP(Real_ptr, sumx, hsumx, 1, 1);
 
     constexpr size_t shmem = sizeof(Real_type)*block_size;
     const size_t max_grid_size = RAJAPERF_HIP_GET_MAX_BLOCKS(
@@ -95,7 +82,7 @@ void TRAP_INT::runHipVariantBase(VariantID vid)
     startTimer();
     for (RepIndex_type irep = 0; irep < run_reps; ++irep) {
 
-      RAJAPERF_HIP_REDUCER_INITIALIZE(&m_sumx_init, sumx, hsumx, 1);
+      RAJAPERF_HIP_REDUCER_INITIALIZE(&m_sumx_init, sumx, hsumx, 1, 1);
 
       const size_t normal_grid_size = RAJA_DIVIDE_CEILING_INT(iend, block_size);
       const size_t grid_size = std::min(normal_grid_size, max_grid_size);
@@ -109,9 +96,8 @@ void TRAP_INT::runHipVariantBase(VariantID vid)
                          sumx,
                          iend);
 
-      Real_type rsumx;
-      RAJAPERF_HIP_REDUCER_COPY_BACK(&rsumx, sumx, hsumx, 1);
-      m_sumx += rsumx * h;
+      RAJAPERF_HIP_REDUCER_COPY_BACK(sumx, hsumx, 1, 1);
+      m_sumx += hsumx[0] * h;
 
     }
     stopTimer();
@@ -164,6 +150,48 @@ void TRAP_INT::runHipVariantRAJA(VariantID vid)
   }
 }
 
+template < size_t block_size, typename MappingHelper >
+void TRAP_INT::runHipVariantRAJANewReduce(VariantID vid)
+{
+  using exec_policy = std::conditional_t<MappingHelper::direct,
+      RAJA::hip_exec<block_size, true /*async*/>,
+      RAJA::hip_exec_occ_calc<block_size, true /*async*/>>;
+
+  const Index_type run_reps = getRunReps();
+  const Index_type ibegin = 0;
+  const Index_type iend = getActualProblemSize();
+
+  auto res{getHipResource()};
+
+  TRAP_INT_DATA_SETUP;
+
+  if ( vid == RAJA_HIP ) {
+
+    startTimer();
+    for (RepIndex_type irep = 0; irep < run_reps; ++irep) {
+
+      Real_type tsumx = m_sumx_init;
+
+      RAJA::forall<exec_policy>(
+        res,
+        RAJA::RangeSegment(ibegin, iend),
+        RAJA::expt::Reduce<RAJA::operators::plus>(&tsumx),
+        [=] __device__ (Index_type i,
+          RAJA::expt::ValOp<Real_type, RAJA::operators::plus>& sumx) {
+          TRAP_INT_BODY;
+        }
+      );
+
+      m_sumx += static_cast<Real_type>(tsumx) * h;
+
+    }
+    stopTimer();
+
+  } else {
+     getCout() << "\n  TRAP_INT : Unknown Hip variant id = " << vid << std::endl;
+  }
+}
+
 void TRAP_INT::runHipVariant(VariantID vid, size_t tune_idx)
 {
   size_t t = 0;
@@ -205,6 +233,16 @@ void TRAP_INT::runHipVariant(VariantID vid, size_t tune_idx)
               t += 1;
 
             });
+
+            if (tune_idx == t) {
+
+              setBlockSize(block_size);
+              runHipVariantRAJANewReduce<decltype(block_size){},
+                                          decltype(mapping_helper)>(vid);
+
+            }
+
+            t += 1;
 
           }
 
@@ -250,6 +288,12 @@ void TRAP_INT::setHipTuningDefinitions(VariantID vid)
                                         std::to_string(block_size));
 
             });
+
+            auto algorithm_helper = gpu_algorithm::block_device_helper{};
+
+            addVariantTuningName(vid, decltype(algorithm_helper)::get_name()+"_"+
+                                      decltype(mapping_helper)::get_name()+"_"+
+                                      "new_"+std::to_string(block_size));
 
           }
 

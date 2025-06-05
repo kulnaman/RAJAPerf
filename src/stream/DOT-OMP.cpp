@@ -1,5 +1,5 @@
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~//
-// Copyright (c) 2017-24, Lawrence Livermore National Security, LLC
+// Copyright (c) 2017-25, Lawrence Livermore National Security, LLC
 // and RAJA Performance Suite project contributors.
 // See the RAJAPerf/LICENSE file for details.
 //
@@ -18,7 +18,7 @@ namespace stream
 {
 
 
-void DOT::runOpenMPVariant(VariantID vid, size_t RAJAPERF_UNUSED_ARG(tune_idx))
+void DOT::runOpenMPVariant(VariantID vid, size_t tune_idx)
 {
 #if defined(RAJA_ENABLE_OPENMP) && defined(RUN_OPENMP)
 
@@ -76,20 +76,49 @@ void DOT::runOpenMPVariant(VariantID vid, size_t RAJAPERF_UNUSED_ARG(tune_idx))
 
     case RAJA_OpenMP : {
 
-      startTimer();
-      for (RepIndex_type irep = 0; irep < run_reps; ++irep) {
+      auto res{getHostResource()};
 
-        RAJA::ReduceSum<RAJA::omp_reduce, Real_type> dot(m_dot_init);
+      if (tune_idx == 0) {
 
-        RAJA::forall<RAJA::omp_parallel_for_exec>(
-          RAJA::RangeSegment(ibegin, iend), [=](Index_type i) {
-          DOT_BODY;
-        });
+        startTimer();
+        for (RepIndex_type irep = 0; irep < run_reps; ++irep) {
 
-        m_dot += dot;
+          RAJA::ReduceSum<RAJA::omp_reduce, Real_type> dot(m_dot_init);
 
+          RAJA::forall<RAJA::omp_parallel_for_exec>( res,
+            RAJA::RangeSegment(ibegin, iend), [=](Index_type i) {
+            DOT_BODY;
+          });
+
+          m_dot += dot;
+
+        }
+        stopTimer();
+
+      } else if (tune_idx == 1) {
+
+        startTimer();
+        for (RepIndex_type irep = 0; irep < run_reps; ++irep) {
+
+          Real_type tdot = m_dot_init;
+
+          RAJA::forall<RAJA::omp_parallel_for_exec>( res,
+            RAJA::RangeSegment(ibegin, iend),
+            RAJA::expt::Reduce<RAJA::operators::plus>(&tdot),
+            [=] (Index_type i,
+              RAJA::expt::ValOp<Real_type, RAJA::operators::plus>& dot) {
+              DOT_BODY;
+            }
+          );
+
+          m_dot += static_cast<Real_type>(tdot);
+
+        }
+        stopTimer();
+
+      } else {
+        getCout() << "\n  DOT : Unknown OpenMP tuning index = " << tune_idx << std::endl;
       }
-      stopTimer();
 
       break;
     }
@@ -102,7 +131,16 @@ void DOT::runOpenMPVariant(VariantID vid, size_t RAJAPERF_UNUSED_ARG(tune_idx))
 
 #else
   RAJA_UNUSED_VAR(vid);
+  RAJA_UNUSED_VAR(tune_idx);
 #endif
+}
+
+void DOT::setOpenMPTuningDefinitions(VariantID vid)
+{
+  addVariantTuningName(vid, "default");
+  if (vid == RAJA_OpenMP) {
+    addVariantTuningName(vid, "new");
+  }
 }
 
 } // end namespace stream

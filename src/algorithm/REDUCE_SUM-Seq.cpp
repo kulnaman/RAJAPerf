@@ -1,5 +1,5 @@
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~//
-// Copyright (c) 2017-24, Lawrence Livermore National Security, LLC
+// Copyright (c) 2017-25, Lawrence Livermore National Security, LLC
 // and RAJA Performance Suite project contributors.
 // See the RAJAPerf/LICENSE file for details.
 //
@@ -18,8 +18,11 @@ namespace algorithm
 {
 
 
-void REDUCE_SUM::runSeqVariant(VariantID vid, size_t RAJAPERF_UNUSED_ARG(tune_idx))
+void REDUCE_SUM::runSeqVariant(VariantID vid, size_t tune_idx)
 {
+#if !defined(RUN_RAJA_SEQ)
+  RAJA_UNUSED_VAR(tune_idx);
+#endif
   const Index_type run_reps = getRunReps();
   const Index_type ibegin = 0;
   const Index_type iend = getActualProblemSize();
@@ -73,23 +76,53 @@ void REDUCE_SUM::runSeqVariant(VariantID vid, size_t RAJAPERF_UNUSED_ARG(tune_id
 
     case RAJA_Seq : {
 
-      startTimer();
-      for (RepIndex_type irep = 0; irep < run_reps; ++irep) {
+      auto res{getHostResource()};
 
-        RAJA::ReduceSum<RAJA::seq_reduce, Real_type> sum(m_sum_init);
+      if (tune_idx == 0) {
 
-        RAJA::forall<RAJA::seq_exec>( RAJA::RangeSegment(ibegin, iend),
-          [=](Index_type i) {
-            REDUCE_SUM_BODY;
-        });
+        startTimer();
+        for (RepIndex_type irep = 0; irep < run_reps; ++irep) {
 
-        m_sum = sum.get();
+          RAJA::ReduceSum<RAJA::seq_reduce, Real_type> sum(m_sum_init);
 
+          RAJA::forall<RAJA::seq_exec>( res,
+            RAJA::RangeSegment(ibegin, iend),
+            [=](Index_type i) {
+              REDUCE_SUM_BODY;
+          });
+
+          m_sum = sum.get();
+
+        }
+        stopTimer();
+
+      } else if (tune_idx == 1) {
+
+        startTimer();
+        for (RepIndex_type irep = 0; irep < run_reps; ++irep) {
+
+          Real_type tsum = m_sum_init;
+
+          RAJA::forall<RAJA::seq_exec>( res,
+            RAJA::RangeSegment(ibegin, iend),
+            RAJA::expt::Reduce<RAJA::operators::plus>(&tsum),
+            [=] (Index_type i,
+              RAJA::expt::ValOp<Real_type, RAJA::operators::plus>& sum) {
+              REDUCE_SUM_BODY;
+            }
+          );
+
+          m_sum = static_cast<Real_type>(tsum);
+
+        }
+        stopTimer();
+
+      } else {
+        getCout() << "\n  REDUCE_SUM : Unknown Seq tuning index = " << tune_idx << std::endl; 
       }
-      stopTimer();
 
       break;
-    }
+   }
 #endif
 
     default : {
@@ -98,6 +131,14 @@ void REDUCE_SUM::runSeqVariant(VariantID vid, size_t RAJAPERF_UNUSED_ARG(tune_id
 
   }
 
+}
+
+void REDUCE_SUM::setSeqTuningDefinitions(VariantID vid)
+{
+  addVariantTuningName(vid, "default");
+  if (vid == RAJA_Seq) {
+    addVariantTuningName(vid, "new");
+  }
 }
 
 } // end namespace algorithm

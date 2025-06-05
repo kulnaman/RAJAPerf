@@ -1,5 +1,5 @@
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~//
-// Copyright (c) 2017-24, Lawrence Livermore National Security, LLC
+// Copyright (c) 2017-25, Lawrence Livermore National Security, LLC
 // and RAJA Performance Suite project contributors.
 // See the RAJAPerf/LICENSE file for details.
 //
@@ -27,23 +27,22 @@ EDGE3D::EDGE3D(const RunParams& params)
 {
   setDefaultProblemSize(100*100*100);  // See rzmax in ADomain struct
   setDefaultReps(10);
-  Index_type rzmax = std::cbrt(getTargetProblemSize())+1;
+  Index_type rzmax = std::cbrt(getTargetProblemSize()) + 1 + std::cbrt(3)-1;
   m_domain = new ADomain(rzmax, /* ndims = */ 3);
 
   m_array_length = m_domain->nnalls;
   size_t number_of_elements = m_domain->lpz+1 - m_domain->fpz;
 
-  setActualProblemSize( number_of_elements );
+  setActualProblemSize( m_domain->n_real_zones );
 
   setItsPerRep( number_of_elements );
   setKernelsPerRep(1);
 
   // touched data size, not actual number of stores and loads
   // see VOL3D.cpp
-  size_t reads_per_node = 3*sizeof(Real_type);
-  size_t writes_per_zone = 1*sizeof(Real_type);
-  setBytesPerRep( writes_per_zone * getItsPerRep() +
-                  reads_per_node * (getItsPerRep() + 1+m_domain->jp+m_domain->kp) );
+  setBytesReadPerRep( 3*sizeof(Real_type) * (getItsPerRep() + 1+m_domain->jp+m_domain->kp) );
+  setBytesWrittenPerRep( 1*sizeof(Real_type) * getItsPerRep() );
+  setBytesAtomicModifyWrittenPerRep( 0 );
 
   constexpr size_t flops_k_loop = 15
                                   + 6*flops_Jxx()
@@ -59,9 +58,11 @@ EDGE3D::EDGE3D(const RunParams& params)
 
   setFLOPsPerRep(number_of_elements * flops_per_element);
 
-  checksum_scale_factor = 0.001 *
+  m_checksum_scale_factor = 0.001 *
               ( static_cast<Checksum_type>(getDefaultProblemSize()) /
                                            getActualProblemSize() );
+
+  setComplexity(Complexity::N);
 
   setUsesFeature(Forall);
 
@@ -83,6 +84,9 @@ EDGE3D::EDGE3D(const RunParams& params)
   setVariantDefined( Base_HIP );
   setVariantDefined( Lambda_HIP );
   setVariantDefined( RAJA_HIP );
+
+  setVariantDefined( Base_SYCL );
+  setVariantDefined( RAJA_SYCL );
 }
 
 EDGE3D::~EDGE3D()
@@ -112,7 +116,7 @@ void EDGE3D::setUp(VariantID vid, size_t RAJAPERF_UNUSED_ARG(tune_idx))
 
 void EDGE3D::updateChecksum(VariantID vid, size_t tune_idx)
 {
-  checksum[vid][tune_idx] += calcChecksum(m_sum, m_array_length, checksum_scale_factor, vid  );
+  checksum[vid][tune_idx] += calcChecksum(m_sum, m_array_length, m_checksum_scale_factor, vid  );
 }
 
 void EDGE3D::tearDown(VariantID vid, size_t RAJAPERF_UNUSED_ARG(tune_idx))

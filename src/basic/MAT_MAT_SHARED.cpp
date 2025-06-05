@@ -24,17 +24,18 @@ MAT_MAT_SHARED::MAT_MAT_SHARED(const RunParams &params)
   setDefaultProblemSize(m_N_default*m_N_default);
   setDefaultReps(5);
 
-  m_N = std::max(Index_type(std::sqrt(getTargetProblemSize())), Index_type(1));
+  m_N = std::sqrt(getTargetProblemSize()) + std::sqrt(2)-1;
 
   setActualProblemSize(m_N * m_N);
 
   setItsPerRep(getActualProblemSize());
   setKernelsPerRep(1);
 
-  setBytesPerRep( m_N*m_N*sizeof(Real_type) +
-                  m_N*m_N*sizeof(Real_type) );
+  setBytesReadPerRep( 2*sizeof(Real_type) * m_N*m_N );
+  setBytesWrittenPerRep( 1*sizeof(Real_type) * m_N*m_N  );
+  setBytesAtomicModifyWrittenPerRep( 0 );
 
-  const Index_type no_tiles = (TL_SZ + m_N - 1) / TL_SZ;
+  const Index_type no_tiles = RAJA_DIVIDE_CEILING_INT(m_N, TL_SZ);
   const Index_type no_blocks = RAJA_DIVIDE_CEILING_INT(m_N, TL_SZ);
   setFLOPsPerRep(2 * TL_SZ * TL_SZ * TL_SZ * no_tiles * no_blocks * no_blocks);
 
@@ -42,6 +43,7 @@ MAT_MAT_SHARED::MAT_MAT_SHARED(const RunParams &params)
               ( static_cast<Checksum_type>(getDefaultProblemSize()) /
                                            getActualProblemSize() );
 
+  setComplexity(Complexity::N_to_the_three_halves);
 
   setUsesFeature(Launch);
 
@@ -60,6 +62,9 @@ MAT_MAT_SHARED::MAT_MAT_SHARED(const RunParams &params)
   setVariantDefined(Base_HIP);
   setVariantDefined(Lambda_HIP);
   setVariantDefined(RAJA_HIP);
+
+  setVariantDefined(Base_SYCL);
+  setVariantDefined(RAJA_SYCL);  
 }
 
 MAT_MAT_SHARED::~MAT_MAT_SHARED() {}
