@@ -1,7 +1,8 @@
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~//
-// Copyright (c) 2017-25, Lawrence Livermore National Security, LLC
-// and RAJA Performance Suite project contributors.
-// See the RAJAPerf/LICENSE file for details.
+// Copyright (c) Lawrence Livermore National Security, LLC and other
+// RAJA Project Developers. See top-level LICENSE and COPYRIGHT
+// files for dates and other details. No copyright assignment is required
+// to contribute to RAJA Performance Suite.
 //
 // SPDX-License-Identifier: (BSD-3-Clause)
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~//
@@ -50,9 +51,6 @@ int main( int argc, char** argv )
 TEST(ShortSuiteTest, Basic)
 {
 
-  // default checksum tolerance for test pass/fail
-  rajaperf::Checksum_type chksum_tol = 1e-7;
-
 // Assemble command line args for basic test
 
   std::vector< std::string > sargv{};
@@ -64,7 +62,7 @@ TEST(ShortSuiteTest, Basic)
   sargv.emplace_back(std::string("3"));
 #endif
   sargv.emplace_back(std::string("--show-progress"));
-  sargv.emplace_back(std::string("--disable-warmup"));
+  sargv.emplace_back(std::string("--warmup-disable"));
 
 #if defined(RAJA_ENABLE_HIP) && \
      (HIP_VERSION_MAJOR < 5 || \
@@ -76,10 +74,6 @@ TEST(ShortSuiteTest, Basic)
 #if !defined(_WIN32)
 
 #if defined(RAJA_ENABLE_TARGET_OPENMP)
-  // checksum tolerance reduced b/c bas omp target variant of JACOBI_1D
-  // kernel result is off
-  chksum_tol = 5e-6;
-
   sargv.emplace_back(std::string("--exclude-kernels"));
   sargv.emplace_back(std::string("Comm"));
   sargv.emplace_back(std::string("EDGE3D"));
@@ -122,8 +116,13 @@ TEST(ShortSuiteTest, Basic)
   // STEP 3: Report suite run summary
   executor.reportRunSummary(std::cout);
 
+  // check that our arguments were valid
+  ASSERT_EQ(executor.getInputState(), rajaperf::RunParams::CheckRun);
+
   // STEP 4: Execute suite
   executor.runSuite();
+
+  std::cout << std::endl;
 
   // STEP 5: Access suite run data and run through checks
   std::vector<rajaperf::KernelBase*> kernels = executor.getKernels();
@@ -134,27 +133,7 @@ TEST(ShortSuiteTest, Basic)
 
     rajaperf::KernelBase* kernel = kernels[ik];
 
-    // 
-    // Get reference checksum (first kernel variant run)
-    //
-    rajaperf::Checksum_type cksum_ref = 0.0;
-    size_t ivck = 0;
-    bool found_ref = false;
-    while ( ivck < variant_ids.size() && !found_ref ) {
-
-      rajaperf::VariantID vid = variant_ids[ivck];
-      size_t num_tunings = kernel->getNumVariantTunings(vid);
-      for (size_t tune_idx = 0; tune_idx < num_tunings; ++tune_idx) {
-        if ( kernel->wasVariantTuningRun(vid, tune_idx) ) {
-          cksum_ref = kernel->getChecksum(vid, tune_idx);
-          found_ref = true;
-          break;
-        }
-      }
-      ++ivck;
-
-    } // while loop over variants until reference checksum found
-
+    rajaperf::Checksum_type cksum_tol = kernel->getChecksumTolerance();
 
     //
     // Check execution time is greater than zero and checksum diff is 
@@ -170,17 +149,20 @@ TEST(ShortSuiteTest, Basic)
 
           double rtime = kernel->getTotTime(vid, tune_idx);
 
-          rajaperf::Checksum_type cksum = kernel->getChecksum(vid, tune_idx); 
-          rajaperf::Checksum_type cksum_diff = std::abs(cksum_ref - cksum);
+          rajaperf::Checksum_type cksum_rel_diff =
+              kernel->getChecksumMaxRelativeAbsoluteDifference(vid, tune_idx);
 
-          // Print kernel information when running test manually
-          std::cout << "Check kernel, variant, tuning : "
-                    << kernel->getName() << " , "
-                    << rajaperf::getVariantName(vid) << " , "
-                    << kernel->getVariantTuningName(vid, tune_idx) 
-                    << std::endl;
+          bool test_passed = (rtime > 0.0) && (cksum_rel_diff <= cksum_tol);
+          if (!test_passed) {
+            // Print kernel information for failing tests
+            std::cout << "Check kernel, variant, tuning : "
+                      << kernel->getName() << " , "
+                      << rajaperf::getVariantName(vid) << " , "
+                      << kernel->getVariantTuningName(vid, tune_idx)
+                      << std::endl;
+          }
           EXPECT_GT(rtime, 0.0);
-          EXPECT_LT(cksum_diff, chksum_tol);
+          EXPECT_LE(cksum_rel_diff, cksum_tol);
           
         }
       } 
